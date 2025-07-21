@@ -1,0 +1,48 @@
+# ========================================
+# 📦 Python build / runtime artifacts
+# ========================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter Notebooks (opsional)
+.ipynb_checkpoints/
+
+# IDE/editor folders
+.vscode/
+.idea/
+*.swp
+*.bak
+*.tmp
+
+# Packaging
+*.egg-info/
+*.egg/
+dist/
+build/
+pip-wheel-metadata/
+
+# Test outputs
+.coverage
+htmlcov/
+.tox/
+.pytest_cache/
+
+# Logs
+*.log
+
+# OS/macOS-specific
+.DS_Store
+Thumbs.db
+
+# Local config
+.env
+*.env

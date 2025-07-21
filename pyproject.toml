@@ -1,0 +1,21 @@
+[project]
+name = "idn-area-extractor"
+version = "0.1.0"
+description = "CLI untuk ekstraksi kolom kode dan nama wilayah dari tabel PDF wired"
+authors = [{ name = "fityannugroho" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "ghostscript",
+    "camelot-py",
+    "pandas",
+    "typer",
+    "tqdm"
+]
+
+[project.scripts]
+idn-area-extractor = "idn_area_extractor.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
