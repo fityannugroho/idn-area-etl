@@ -1,21 +1,31 @@
 [project]
-name = "idn-area-extractor"
+name = "idn-area-etl"
 version = "0.1.0"
-description = "CLI untuk ekstraksi kolom kode dan nama wilayah dari tabel PDF wired"
-authors = [{ name = "fityannugroho" }]
+description = "CLI for extracting indonesia area codes and names from PDF tables and converting them to structured CSV format."
+authors = [
+    { name = "fityannugroho", email = "fityannugroho@gmail.com" }
+]
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
-    "ghostscript",
-    "camelot-py",
-    "pandas",
-    "typer",
-    "tqdm"
+    "camelot-py>=0.11.0",
+    "ghostscript>=0.8.1",
+    "opencv-python>=4.12.0.88",
+    "pandas>=2.0.3",
+    "pypdf>=3.17.4",
+    "tqdm>=4.67.1",
+    "typer>=0.16.0",
 ]
 
+[dependency-groups]
+dev = []
+
 [project.scripts]
-idn-area-extractor = "idn_area_extractor.cli:app"
+idnareaetl = "idn_area_etl.cli:app"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.uv]
+package = true

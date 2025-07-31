@@ -1,27 +1,75 @@
-# 📄 idn-area Extractor
+# 📄 idn-area ETL
 
-Ekstraksi otomatis kolom `kode` dan `nama wilayah` dari file PDF dengan tabel bergaris (wired table) menggunakan Camelot.
+A command-line interface for extracting Indonesian administrative area data from PDF files, transforming it, and saving it in structured CSV format.
 
-## Instalasi
+The extractor processes PDF tables containing area codes and names for provinces, regencies, districts, and villages, organizing them into separate CSV files with proper hierarchical relationships.
 
-1. Clone repositori ini
-2. Masuk ke direktori proyek
-3. Aktifkan virtual environment:
+## Usage
+
+```
+Usage: idn-area-etl [OPTIONS] PDF_PATH
+
+Extract tables of Indonesian administrative areas data from PDF file and save the cleaned data to a CSV file.
+
+╭─ Arguments ──────────────────────────────────────────────────────────────────────────────╮
+│ *    pdf_path      FILE  Path to the PDF file [default: None] [required]                 │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Options ────────────────────────────────────────────────────────────────────────────────╮
+│ --chunk-size          -c      INTEGER    Number of pages to read per chunk [default: 3]  │
+│ --range               -r      TEXT       Specific pages to extract, e.g., '1,3,4' or     │
+│                                          '1-4,6'                                         │
+│                                          [default: None]                                 │
+│ --output              -o      TEXT       Name of the output CSV file (without extension) │
+│                                          [default: None]                                 │
+│ --destination         -d      DIRECTORY  Destination folder for the output files         │
+│ --parallel                               Enable parallel processing for reading PDF      │
+│                                          tables                                          │
+│ --version             -v                 Show the version of this package                │
+│ --install-completion                     Install completion for the current shell.       │
+│ --show-completion                        Show completion for the current shell, to copy  │
+│                                          it or customize the installation.               │
+│ --help                                   Show this message and exit.                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+## Development Setup
+
+### Prerequisites
+
+- [`uv`](https://docs.astral.sh/uv/getting-started/installation) package manager
+- Python 3.10 or higher
+
+> Tip: You can use `uv` to install Python. See the [`uv` Python installation guide](https://docs.astral.sh/uv/guides/install-python) for more details.
+
+### Installation Steps
+
+1. Clone this repository
+1. Navigate to the project directory
+1. Install dependencies using `uv`:
+   ```bash
+   uv sync --all-extras
+   ```
+1. Run the tool locally
+
+   You can run the tool directly using `uv` or by activating the virtual environment created by `uv`.
+
+   With `uv`:
+   ```bash
+   uv run idnareaetl --help
+   ```
+
+   From the virtual environment:
    ```bash
    source .venv/bin/activate
-   ```
-4. Instal dependensi:
-   ```bash
-   pip install .
+   idnareaetl --help
    ```
 
-> **CATATAN:**
-> Untuk keluar dari virtual environment, gunakan perintah `deactivate`
+   > **Note:** To exit the virtual environment, use the command `deactivate`.
 
-## Penggunaan
+## Building the Package
 
-Untuk mengekstrak data dari file PDF, gunakan perintah berikut:
+To build the package, you can use the `uv` command:
 
 ```bash
-idn-area-extractor <path_to_pdf>
+uv build
 ```
