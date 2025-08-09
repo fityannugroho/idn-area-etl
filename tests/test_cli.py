@@ -2,21 +2,21 @@
 Tests for CLI functionality.
 Tests the command-line interface and argument validation.
 """
+
 import pytest
-from unittest.mock import patch, Mock
 from typer.testing import CliRunner
 from src.idn_area_etl.cli import (
     app,
     validate_page_range,
     parse_page_range,
     version_option_callback,
-    _validate_inputs
+    _validate_inputs,  # pyright: ignore
 )
 from pathlib import Path
 
 
 @pytest.fixture
-def runner():
+def runner() -> CliRunner:
     """Test runner for CLI tests."""
     return CliRunner()
 
@@ -24,19 +24,19 @@ def runner():
 class TestCLIBasics:
     """Test basic CLI functionality."""
 
-    def test_cli_help_command(self, runner):
+    def test_cli_help_command(self, runner: CliRunner):
         """Test CLI help display."""
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
         assert "Usage:" in result.stdout
 
-    def test_cli_version_command(self, runner):
+    def test_cli_version_command(self, runner: CliRunner):
         """Test CLI version display."""
         result = runner.invoke(app, ["--version"])
         # Accept both success and error since version may not be configured
         assert result.exit_code in [0, 1]
 
-    def test_missing_arguments(self, runner):
+    def test_missing_arguments(self, runner: CliRunner):
         """Test behavior with missing arguments."""
         result = runner.invoke(app, [])
         # Should show error for missing required argument
@@ -71,7 +71,7 @@ class TestPageRangeValidation:
 class TestInputValidation:
     """Test input validation functions."""
 
-    def test_validate_inputs_with_valid_file(self, temp_directory):
+    def test_validate_inputs_with_valid_file(self, temp_directory: Path):
         """Test input validation with valid PDF file."""
         pdf_file = temp_directory / "test.pdf"
         pdf_file.write_text("dummy content")
@@ -83,7 +83,7 @@ class TestInputValidation:
             # May exit due to validation, but that's expected behavior
             pass
 
-    def test_validate_empty_output_name(self, temp_directory):
+    def test_validate_empty_output_name(self, temp_directory: Path):
         """Test validation with empty output name."""
         pdf_file = temp_directory / "test.pdf"
         pdf_file.write_text("dummy content")

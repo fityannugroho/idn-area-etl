@@ -1,31 +1,28 @@
 """
 Test module for file I/O operations and CSV handling.
 """
-import pytest
+
 import csv
-import tempfile
 import os
 from pathlib import Path
-from unittest.mock import patch, Mock, mock_open
 import pandas as pd
-
 from src.idn_area_etl.cli import (
     PROVINCE_CODE_LENGTH,
     REGENCY_CODE_LENGTH,
     DISTRICT_CODE_LENGTH,
-    VILLAGE_CODE_LENGTH
+    VILLAGE_CODE_LENGTH,
 )
 
 
 class TestCSVOutput:
     """Test cases for CSV output functionality."""
 
-    def test_csv_file_creation(self, temp_directory):
+    def test_csv_file_creation(self, temp_directory: Path):
         """Test CSV file creation and basic structure."""
         csv_file = temp_directory / "test.csv"
 
         # Create a simple CSV file
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["code", "name"])
             writer.writerow(["11", "ACEH"])
@@ -34,80 +31,76 @@ class TestCSVOutput:
         # Verify file was created and has correct content
         assert csv_file.exists()
 
-        with open(csv_file, 'r', encoding='utf-8') as f:
+        with open(csv_file, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             rows = list(reader)
 
-        expected_rows = [
-            ["code", "name"],
-            ["11", "ACEH"],
-            ["12", "SUMATERA UTARA"]
-        ]
+        expected_rows = [["code", "name"], ["11", "ACEH"], ["12", "SUMATERA UTARA"]]
         assert rows == expected_rows
 
-    def test_province_csv_structure(self, temp_directory):
+    def test_province_csv_structure(self, temp_directory: Path):
         """Test province CSV file structure."""
         csv_file = temp_directory / "provinces.csv"
 
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["code", "name"])
             writer.writerow(["11", "ACEH"])
             writer.writerow(["12", "SUMATERA UTARA"])
 
         # Read and verify structure
-        df = pd.read_csv(csv_file, dtype={'code': str})
+        df = pd.read_csv(csv_file, dtype={"code": str})
         assert list(df.columns) == ["code", "name"]
         assert len(df) == 2
         assert df.iloc[0]["code"] == "11"
         assert df.iloc[0]["name"] == "ACEH"
 
-    def test_regency_csv_structure(self, temp_directory):
+    def test_regency_csv_structure(self, temp_directory: Path):
         """Test regency CSV file structure."""
         csv_file = temp_directory / "regencies.csv"
 
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["code", "province_code", "name"])
             writer.writerow(["1101", "11", "SIMEULUE"])
             writer.writerow(["1102", "11", "ACEH SINGKIL"])
 
         # Read and verify structure
-        df = pd.read_csv(csv_file, dtype={'code': str, 'province_code': str})
+        df = pd.read_csv(csv_file, dtype={"code": str, "province_code": str})
         assert list(df.columns) == ["code", "province_code", "name"]
         assert len(df) == 2
         assert df.iloc[0]["code"] == "1101"
         assert df.iloc[0]["province_code"] == "11"
 
-    def test_district_csv_structure(self, temp_directory):
+    def test_district_csv_structure(self, temp_directory: Path):
         """Test district CSV file structure."""
         csv_file = temp_directory / "districts.csv"
 
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["code", "regency_code", "name"])
             writer.writerow(["110101", "1101", "TEUPAH SELATAN"])
             writer.writerow(["110102", "1101", "SIMEULUE TIMUR"])
 
         # Read and verify structure
-        df = pd.read_csv(csv_file, dtype={'code': str, 'regency_code': str})
+        df = pd.read_csv(csv_file, dtype={"code": str, "regency_code": str})
         assert list(df.columns) == ["code", "regency_code", "name"]
         assert len(df) == 2
         assert df.iloc[0]["code"] == "110101"
         assert df.iloc[0]["regency_code"] == "1101"
 
-    def test_village_csv_structure(self, temp_directory):
+    def test_village_csv_structure(self, temp_directory: Path):
         """Test village CSV file structure."""
         csv_file = temp_directory / "villages.csv"
 
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["code", "district_code", "name"])
             writer.writerow(["1101011001", "110101", "LUGU"])
             writer.writerow(["1101011002", "110101", "LABUHAN BAJAU"])
 
         # Read and verify structure
-        df = pd.read_csv(csv_file, dtype={'code': str, 'district_code': str})
+        df = pd.read_csv(csv_file, dtype={"code": str, "district_code": str})
         assert list(df.columns) == ["code", "district_code", "name"]
         assert len(df) == 2
         assert df.iloc[0]["code"] == "1101011001"
@@ -124,9 +117,9 @@ class TestCodeLengthConstants:
         assert DISTRICT_CODE_LENGTH == 8
         assert VILLAGE_CODE_LENGTH == 13
 
-    def test_code_hierarchy(self, sample_area_data):
+    def test_code_hierarchy(self, sample_area_data: list[tuple[str, str]]):
         """Test that area codes follow the expected hierarchy."""
-        for code, name in sample_area_data:
+        for code, _name in sample_area_data:
             if len(code) == PROVINCE_CODE_LENGTH:
                 # Province codes should be 2 digits
                 assert code.isdigit()
@@ -160,7 +153,7 @@ class TestCodeLengthConstants:
 class TestFileOperations:
     """Test cases for file operations."""
 
-    def test_file_path_handling(self, temp_directory):
+    def test_file_path_handling(self, temp_directory: Path):
         """Test file path handling with different scenarios."""
         # Test with Path objects
         file_path = temp_directory / "test.csv"
@@ -175,7 +168,7 @@ class TestFileOperations:
         file_path.unlink()
         assert not file_path.exists()
 
-    def test_directory_creation(self, temp_directory):
+    def test_directory_creation(self, temp_directory: Path):
         """Test directory creation for output files."""
         nested_dir = temp_directory / "nested" / "output"
         nested_dir.mkdir(parents=True, exist_ok=True)
@@ -188,7 +181,7 @@ class TestFileOperations:
         test_file.touch()
         assert test_file.exists()
 
-    def test_csv_encoding_utf8(self, temp_directory):
+    def test_csv_encoding_utf8(self, temp_directory: Path):
         """Test CSV file encoding with UTF-8 characters."""
         csv_file = temp_directory / "test_utf8.csv"
 
@@ -197,26 +190,26 @@ class TestFileOperations:
             ["code", "name"],
             ["11", "ACÈH"],
             ["12", "SUMATRA ÚTARA"],
-            ["13", "RÎAU"]
+            ["13", "RÎAU"],
         ]
 
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             for row in test_data:
                 writer.writerow(row)
 
         # Read back and verify encoding
-        with open(csv_file, 'r', encoding='utf-8') as f:
+        with open(csv_file, "r", encoding="utf-8") as f:
             reader = csv.reader(f)
             rows = list(reader)
 
         assert rows == test_data
 
-    def test_csv_file_permissions(self, temp_directory):
+    def test_csv_file_permissions(self, temp_directory: Path):
         """Test CSV file creation with proper permissions."""
         csv_file = temp_directory / "permissions_test.csv"
 
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["test", "data"])
 
@@ -229,19 +222,19 @@ class TestFileOperations:
 class TestDataIntegrity:
     """Test cases for data integrity in file operations."""
 
-    def test_duplicate_prevention(self, temp_directory):
+    def test_duplicate_prevention(self, temp_directory: Path):
         """Test prevention of duplicate entries."""
         csv_file = temp_directory / "duplicates.csv"
 
         # Simulate the duplicate prevention logic for provinces
-        province_codes = set()
-        provinces_to_write = []
+        province_codes: set[str] = set()
+        provinces_to_write: list[tuple[str, str]] = []
 
         test_provinces = [
             ("11", "ACEH"),
             ("12", "SUMATERA UTARA"),
             ("11", "ACEH"),  # Duplicate
-            ("13", "SUMATERA BARAT")
+            ("13", "SUMATERA BARAT"),
         ]
 
         for code, name in test_provinces:
@@ -250,40 +243,36 @@ class TestDataIntegrity:
                 provinces_to_write.append((code, name))
 
         # Write to CSV
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+        with open(csv_file, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["code", "name"])
             for code, name in provinces_to_write:
                 writer.writerow([code, name])
 
         # Verify no duplicates
-        df = pd.read_csv(csv_file, dtype={'code': str})
+        df = pd.read_csv(csv_file, dtype={"code": str})
         assert len(df) == 3  # Should have 3 unique provinces
         assert list(df["code"]) == ["11", "12", "13"]
 
-    def test_data_consistency_across_files(self, temp_directory):
+    def test_data_consistency_across_files(self, temp_directory: Path):
         """Test data consistency across different area level files."""
         # Simplified test - just check that we can write and read files correctly
         files = {
-            'province': temp_directory / "test.province.csv",
-            'regency': temp_directory / "test.regency.csv"
+            "province": temp_directory / "test.province.csv",
+            "regency": temp_directory / "test.regency.csv",
         }
 
         # Create province file
-        province_data = pd.DataFrame([
-            {"code": "11", "name": "ACEH"}
-        ])
-        province_data.to_csv(files['province'], index=False)
+        province_data = pd.DataFrame([{"code": "11", "name": "ACEH"}])
+        province_data.to_csv(files["province"], index=False)
 
         # Create regency file
-        regency_data = pd.DataFrame([
-            {"code": "1101", "province_code": "11", "name": "SIMEULUE"}
-        ])
-        regency_data.to_csv(files['regency'], index=False)
+        regency_data = pd.DataFrame([{"code": "1101", "province_code": "11", "name": "SIMEULUE"}])
+        regency_data.to_csv(files["regency"], index=False)
 
         # Read back and verify
-        province_df = pd.read_csv(files['province'], dtype={'code': str})
-        regency_df = pd.read_csv(files['regency'], dtype={'code': str, 'province_code': str})
+        province_df = pd.read_csv(files["province"], dtype={"code": str})
+        regency_df = pd.read_csv(files["regency"], dtype={"code": str, "province_code": str})
 
         # Basic consistency checks
         assert len(province_df) == 1

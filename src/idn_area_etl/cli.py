@@ -1,17 +1,19 @@
 import csv
+from importlib.metadata import PackageNotFoundError, version
+from io import TextIOWrapper
 import os
+from pathlib import Path
 import re
 import signal
 import time
-from importlib.metadata import PackageNotFoundError, version
-from pathlib import Path
-from typing import Iterator, Annotated
+from types import FrameType
+from typing import Annotated, Any, Iterator
 
 import camelot
 import pandas as pd
-import typer
 from pypdf import PdfReader
 from tqdm import tqdm
+import typer
 
 app = typer.Typer()
 
@@ -33,14 +35,17 @@ MAIN_PID = os.getpid()
 # Flag to indicate user interrupted
 interrupted = False
 
-def handle_sigint(signum, frame) -> None:
+
+def handle_sigint(signum: int, frame: FrameType | None) -> None:
     """Handle SIGINT signal (Ctrl+C) gracefully."""
     global interrupted
     interrupted = True
     if os.getpid() == MAIN_PID:
         typer.echo("\n⛔ Aborted by user. Finishing current chunk and exiting...")
 
+
 signal.signal(signal.SIGINT, handle_sigint)
+
 
 def clean_name(name: str) -> str:
     """
@@ -53,9 +58,6 @@ def clean_name(name: str) -> str:
     - Remove digits+space at the beginning
     - Remove double spaces
     """
-    if not isinstance(name, str):
-        return ""
-
     # Apply basic text normalization
     text = name.strip().replace("\r", "").replace("\t", " ")
 
@@ -78,10 +80,12 @@ def _apply_regex_transformations(text: str) -> str:
 
     return text.strip()
 
+
 def fix_wrapped_name(name: str, max_line_length: int = 16) -> str:
     """
     Fix word splits in a multi-line name caused by line wrapping.
-    Only merges if the previous line is full, ends mid-word, and next line is a lowercase fragment.
+    Only merges if the previous line is full, ends mid-word, and next line is a lowercase
+    fragment.
 
     Args:
         name (str): Name with '\n' line breaks.
@@ -90,18 +94,15 @@ def fix_wrapped_name(name: str, max_line_length: int = 16) -> str:
     Returns:
         str: Fixed name with preserved newlines.
     """
-    if not isinstance(name, str):
-        return ""
-
     if not name:
         return ""
 
     # Early return if no newlines
-    if '\n' not in name:
+    if "\n" not in name:
         return name.rstrip()
 
-    lines = name.split('\n')
-    fixed_lines = []
+    lines = name.split("\n")
+    fixed_lines: list[str] = []
 
     for line in lines:
         stripped_line = line.rstrip()
@@ -114,16 +115,19 @@ def fix_wrapped_name(name: str, max_line_length: int = 16) -> str:
             first_char = stripped_line[0]
             is_lowercase_fragment = first_char.islower()
 
-            if (len(prev_line) >= max_line_length
+            if (
+                len(prev_line) >= max_line_length
                 and len(stripped_line) <= 3
-                and prev_line[-1] not in ' -'
-                and is_lowercase_fragment):
+                and prev_line[-1] not in " -"
+                and is_lowercase_fragment
+            ):
                 fixed_lines[-1] += stripped_line
                 continue
 
         fixed_lines.append(stripped_line)
 
-    return '\n'.join(fixed_lines)
+    return "\n".join(fixed_lines)
+
 
 def validate_page_range(page_range: str) -> bool:
     """
@@ -135,18 +139,20 @@ def validate_page_range(page_range: str) -> bool:
     pattern = r"^(\d+(-\d+)?)(,(\d+(-\d+)?))*$"
     return bool(re.match(pattern, page_range))
 
+
 def parse_page_range(page_range: str, total_pages: int) -> list[int]:
     """
     Parse a page range string (e.g., '1,3,4' or '1-2,5,7-10') into a list of valid page numbers.
     """
-    pages = set()
-    for part in page_range.split(','):
-        if '-' in part:
-            start, end = map(int, part.split('-'))
+    pages: set[int] = set()
+    for part in page_range.split(","):
+        if "-" in part:
+            start, end = map(int, part.split("-"))
             pages.update(range(start, end + 1))
         else:
             pages.add(int(part))
     return sorted(p for p in pages if 1 <= p <= total_pages)
+
 
 def normalize_words(words: str) -> str:
     """
@@ -155,7 +161,7 @@ def normalize_words(words: str) -> str:
     "K o d e" → "Kode"
     "N A M A / J U M L A H" → "Nama/Jumlah"
     """
-    if not isinstance(words, str) or not words.strip():
+    if not words.strip():
         return ""
 
     tokens = words.split()
@@ -171,7 +177,8 @@ def normalize_words(words: str) -> str:
             return words
 
     # All tokens are single characters or symbols → normalize
-    return ''.join(tokens)
+    return "".join(tokens)
+
 
 def is_target_table(df: pd.DataFrame) -> bool:
     """
@@ -189,10 +196,11 @@ def is_target_table(df: pd.DataFrame) -> bool:
 
     # Check if the table matches the target structure
     return (
-        len(normalized_headers) >= 2 and
-        normalized_headers[0] == "kode" and
-        "nama provinsi" in normalized_headers[1]
+        len(normalized_headers) >= 2
+        and normalized_headers[0] == "kode"
+        and "nama provinsi" in normalized_headers[1]
     )
+
 
 def extract_area_code_and_name_from_table(df: pd.DataFrame) -> list[tuple[str, str]]:
     """
@@ -240,9 +248,7 @@ def extract_area_code_and_name_from_table(df: pd.DataFrame) -> list[tuple[str, s
         valid_strings = column_series[is_valid].astype(str).str.strip()
 
         # Filter out empty and "nan" strings
-        good_strings = valid_strings[
-            (valid_strings != "") & (valid_strings != "nan")
-        ]
+        good_strings = valid_strings[(valid_strings != "") & (valid_strings != "nan")]
 
         # Fill empty candidates
         empty_candidates = candidates == ""
@@ -265,10 +271,12 @@ def extract_area_code_and_name_from_table(df: pd.DataFrame) -> list[tuple[str, s
     # Filter valid entries
     return [(code, name) for code, name in zip(codes, names) if code and name]
 
+
 def chunked(iterable: list[int], size: int) -> Iterator[list[int]]:
     """Yield successive chunks of given size."""
     for i in range(0, len(iterable), size):
-        yield iterable[i:i + size]
+        yield iterable[i : i + size]
+
 
 def version_option_callback(value: bool) -> None:
     """
@@ -280,10 +288,18 @@ def version_option_callback(value: bool) -> None:
             typer.echo(f"{package_name}: {version(package_name)}")
             raise typer.Exit()
         except PackageNotFoundError:
-            typer.echo(f"{package_name}: Version information not available. Make sure the package is installed.")
+            typer.echo(
+                (
+                    f"{package_name}: Version information not available. "
+                    "Make sure the package is installed."
+                )
+            )
             raise typer.Exit(1)
 
-def _validate_inputs(pdf_path: Path, page_range: str | None, output: str | None, destination: Path) -> None:
+
+def _validate_inputs(
+    pdf_path: Path, page_range: str | None, output: str | None, destination: Path
+) -> None:
     """Validate all input parameters."""
     # Validate PDF file extension
     if pdf_path.suffix.lower() != ".pdf":
@@ -309,6 +325,7 @@ def _validate_inputs(pdf_path: Path, page_range: str | None, output: str | None,
         typer.echo("❌ The destination must be a directory.")
         raise typer.Exit(code=1)
 
+
 def format_duration(duration: float) -> str:
     """Format duration in seconds to a string in h m s, m s, or s."""
     hours, remainder = divmod(duration, 3600)
@@ -319,18 +336,53 @@ def format_duration(duration: float) -> str:
         return f"{int(minutes)}m {int(seconds)}s"
     return f"{seconds:.2f}s"
 
+
 @app.command()
 def extract(
-    pdf_path: Annotated[Path, typer.Argument(exists=True, file_okay=True, dir_okay=False, help="Path to the PDF file")],
-    chunk_size: Annotated[int, typer.Option("--chunk-size", "-c", help="Number of pages to read per chunk")] = 3,
-    page_range: Annotated[str | None, typer.Option("--range", "-r", help="Specific pages to extract, e.g., '1,3,4' or '1-4,6'")] = None,
-    output: Annotated[str | None, typer.Option("--output", "-o", help="Name of the output CSV file (without extension)")] = None,
-    destination: Annotated[Path, typer.Option("--destination", "-d", dir_okay=True, file_okay=False, help="Destination folder for the output files", show_default=False)] = Path.cwd(),
-    parallel: Annotated[bool, typer.Option("--parallel", help="Enable parallel processing for reading PDF tables")] = False,
-    version: Annotated[bool | None, typer.Option("--version", "-v", callback=version_option_callback, is_eager=True, help="Show the version of this package")] = None,
+    pdf_path: Annotated[
+        Path,
+        typer.Argument(exists=True, file_okay=True, dir_okay=False, help="Path to the PDF file"),
+    ],
+    chunk_size: Annotated[
+        int, typer.Option("--chunk-size", "-c", help="Number of pages to read per chunk")
+    ] = 3,
+    page_range: Annotated[
+        str | None,
+        typer.Option("--range", "-r", help="Specific pages to extract, e.g., '1,3,4' or '1-4,6'"),
+    ] = None,
+    output: Annotated[
+        str | None,
+        typer.Option("--output", "-o", help="Name of the output CSV file (without extension)"),
+    ] = None,
+    destination: Annotated[
+        Path,
+        typer.Option(
+            "--destination",
+            "-d",
+            dir_okay=True,
+            file_okay=False,
+            help="Destination folder for the output files",
+            show_default=False,
+        ),
+    ] = Path.cwd(),
+    parallel: Annotated[
+        bool,
+        typer.Option("--parallel", help="Enable parallel processing for reading PDF tables"),
+    ] = False,
+    version: Annotated[
+        bool | None,
+        typer.Option(
+            "--version",
+            "-v",
+            callback=version_option_callback,
+            is_eager=True,
+            help="Show the version of this package",
+        ),
+    ] = None,
 ) -> None:
     """
-    Extract tables of Indonesian administrative areas data from PDF file and save the cleaned data to a CSV file.
+    Extract tables of Indonesian administrative areas data from PDF file and save the cleaned data
+    to a CSV file.
     """
     _validate_inputs(pdf_path, page_range, output, destination)
 
@@ -347,44 +399,46 @@ def extract(
     total_pages = len(reader.pages)
 
     # Determine the pages to extract
-    pages_to_extract = parse_page_range(page_range, total_pages) if page_range else list(range(1, total_pages + 1))
+    pages_to_extract = (
+        parse_page_range(page_range, total_pages) if page_range else list(range(1, total_pages + 1))
+    )
 
     output_name = output or pdf_path.stem
 
     # Write batch thresholds - different sizes for different data types
     WRITE_BATCH_SIZES = {
-        'province': 500,    # Small dataset, keep in memory
-        'regency': 500,     # Small dataset, keep in memory
-        'district': 1000,   # Medium dataset, batch write
-        'village': 2000     # Large dataset, frequent writes
+        "province": 500,  # Small dataset, keep in memory
+        "regency": 500,  # Small dataset, keep in memory
+        "district": 1000,  # Medium dataset, batch write
+        "village": 2000,  # Large dataset, frequent writes
     }
 
     # Data buffers with batch writing
-    data_buffers = {
-        'province': [],
-        'regency': [],
-        'district': [],
-        'village': []
+    data_buffers: dict[str, list[list[str]]] = {
+        "province": [],
+        "regency": [],
+        "district": [],
+        "village": [],
     }
 
     # Initialize CSV files and writers
     output_files = {
-        'province': destination / f"{output_name}.province.csv",
-        'regency': destination / f"{output_name}.regency.csv",
-        'district': destination / f"{output_name}.district.csv",
-        'village': destination / f"{output_name}.village.csv"
+        "province": destination / f"{output_name}.province.csv",
+        "regency": destination / f"{output_name}.regency.csv",
+        "district": destination / f"{output_name}.district.csv",
+        "village": destination / f"{output_name}.village.csv",
     }
 
     headers = {
-        'province': ["code", "name"],
-        'regency': ["code", "province_code", "name"],
-        'district': ["code", "regency_code", "name"],
-        'village': ["code", "district_code", "name"]
+        "province": ["code", "name"],
+        "regency": ["code", "province_code", "name"],
+        "district": ["code", "regency_code", "name"],
+        "village": ["code", "district_code", "name"],
     }
 
     # Open all files and write headers
-    file_handles = {}
-    writers = {}
+    file_handles: dict[str, TextIOWrapper] = {}
+    writers: dict[str, Any] = {}
 
     def flush_buffer(data_type: str) -> None:
         """Write buffer contents to file and clear buffer."""
@@ -396,14 +450,22 @@ def extract(
     try:
         # Initialize all CSV files
         for data_type, file_path in output_files.items():
-            file_handles[data_type] = open(file_path, mode="w", newline='', encoding="utf-8", buffering=8192)
+            file_handles[data_type] = open(
+                file_path, mode="w", newline="", encoding="utf-8", buffering=8192
+            )
             writers[data_type] = csv.writer(file_handles[data_type])
             writers[data_type].writerow(headers[data_type])
 
-        province_codes = set()
+        province_codes: set[str] = set()
         extracted_count = 0
 
-        with tqdm(total=len(pages_to_extract), desc="📄 Reading pages", colour="green", miniters=1, smoothing=0.1) as pbar:
+        with tqdm(
+            total=len(pages_to_extract),
+            desc="📄 Reading pages",
+            colour="green",
+            miniters=1,
+            smoothing=0.1,
+        ) as pbar:
             for chunk in chunked(pages_to_extract, chunk_size):
                 # Check if the user interrupted the process
                 if interrupted:
@@ -412,7 +474,10 @@ def extract(
                 page_str = ",".join(map(str, chunk))
 
                 try:
-                    page_tables = camelot.read_pdf(str(pdf_path), pages=page_str, flavor="lattice", parallel=parallel)
+                    # type: ignore
+                    page_tables = camelot.read_pdf(
+                        str(pdf_path), pages=page_str, flavor="lattice", parallel=parallel
+                    )
                 except Exception as e:
                     pbar.write(f"⚠️ Error reading pages {page_str}: {e}")
                     pbar.update(len(chunk))
@@ -429,13 +494,19 @@ def extract(
                         if code_length == PROVINCE_CODE_LENGTH:
                             if code not in province_codes:
                                 province_codes.add(code)
-                                data_buffers['province'].append([code, name])
+                                data_buffers["province"].append([code, name])
                         elif code_length == REGENCY_CODE_LENGTH:
-                            data_buffers['regency'].append([code, code[:PROVINCE_CODE_LENGTH], name])
+                            data_buffers["regency"].append(
+                                [code, code[:PROVINCE_CODE_LENGTH], name]
+                            )
                         elif code_length == DISTRICT_CODE_LENGTH:
-                            data_buffers['district'].append([code, code[:REGENCY_CODE_LENGTH], name])
+                            data_buffers["district"].append(
+                                [code, code[:REGENCY_CODE_LENGTH], name]
+                            )
                         elif code_length == VILLAGE_CODE_LENGTH:
-                            data_buffers['village'].append([code, code[:DISTRICT_CODE_LENGTH], name])
+                            data_buffers["village"].append(
+                                [code, code[:DISTRICT_CODE_LENGTH], name]
+                            )
 
                         # Check if any buffer needs flushing
                         for data_type, buffer in data_buffers.items():
@@ -467,6 +538,7 @@ def extract(
     typer.echo(f"✅ Extraction completed in {format_duration(duration)}")
     typer.echo(f"🧾 Number of rows extracted: {extracted_count}")
     typer.echo(f"📁 Output file saved at: {(destination / f'{output_name}.*.csv').resolve()}")
+
 
 if __name__ == "__main__":
     app()

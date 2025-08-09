@@ -1,14 +1,13 @@
 """
 Test module for text processing functions in the CLI module.
 """
-import pytest
+
 from src.idn_area_etl.cli import (
     clean_name,
     normalize_words,
     validate_page_range,
     parse_page_range,
     format_duration,
-    _apply_regex_transformations,
     fix_wrapped_name,
 )
 
@@ -41,14 +40,38 @@ class TestCleanName:
         """Test cleaning empty or invalid names."""
         assert clean_name("") == ""
         assert clean_name("   ") == ""
-        assert clean_name(None) == ""
-        assert clean_name(123) == ""
 
     def test_clean_name_complex_case(self):
         """Test cleaning complex cases with multiple issues."""
         dirty_name = "123\nSUMATE\nRA  \n\n  UTARA\n456"
         expected = "SUMATE RA UTARA"
         assert clean_name(dirty_name) == expected
+
+    def test_apply_regex_transformations_basic(self):
+        """Test basic regex transformations."""
+        assert clean_name("ACEH") == "ACEH"
+        assert clean_name("SUMATERA UTARA") == "SUMATERA UTARA"
+
+    def test_apply_regex_transformations_digits_newlines(self):
+        """Test regex transformations with digits and newlines."""
+        assert clean_name("123\nACEH") == "ACEH"
+        assert clean_name("ACEH\n456") == "ACEH"
+
+    def test_apply_regex_transformations_multiple_newlines(self):
+        """Test regex transformations with multiple newlines."""
+        assert clean_name("ACEH\n\n\nBESAR") == "ACEH BESAR"
+        assert clean_name("LINE1\n\nLINE2\n\n\nLINE3") == "LINE1 LINE2 LINE3"
+
+    def test_apply_regex_transformations_digits_spaces(self):
+        """Test regex transformations with digits and spaces."""
+        assert clean_name("123 ACEH") == "ACEH"
+        assert clean_name("456 SUMATERA UTARA") == "SUMATERA UTARA"
+
+    def test_apply_regex_transformations_double_spaces(self):
+        """Test regex transformations with double spaces."""
+        assert clean_name("ACEH  BESAR") == "ACEH BESAR"
+        assert clean_name("WORD1   WORD2    WORD3") == "WORD1 WORD2 WORD3"
+
 
 class TestWrappedText:
     """Test cases for the fix_wrapped_name function."""
@@ -72,8 +95,6 @@ class TestWrappedText:
         """Test fixing empty or invalid wrapped text."""
         assert fix_wrapped_name("") == ""
         assert fix_wrapped_name("   ") == ""
-        assert fix_wrapped_name(None) == ""
-        assert fix_wrapped_name(123) == ""
 
     def test_fix_wrapped_name_actual_data(self):
         """Test fixing wrapped text with actual data."""
@@ -90,6 +111,7 @@ class TestWrappedText:
         assert fix_wrapped_name("Teungoh Glumpang\nVII") == "Teungoh Glumpang\nVII"
         assert fix_wrapped_name("Perkebunan Sungai\nIyu") == "Perkebunan Sungai\nIyu"
         assert fix_wrapped_name("Limba U I") == "Limba U I"
+
 
 class TestNormalizeWords:
     """Test cases for the normalize_words function."""
@@ -111,7 +133,6 @@ class TestNormalizeWords:
         """Test normalizing edge cases."""
         assert normalize_words("") == ""
         assert normalize_words("   ") == ""
-        assert normalize_words(None) == ""
         assert normalize_words("A") == "A"
         assert normalize_words("AB") == "AB"
 
@@ -127,6 +148,7 @@ class TestNormalizeWords:
         assert normalize_words("N u n u") == "Nunu"
         assert normalize_words("R a i n i s") == "Rainis"
         assert normalize_words("Limba U I") == "Limba U I"
+
 
 class TestValidatePageRange:
     """Test cases for the validate_page_range function."""
@@ -204,32 +226,3 @@ class TestFormatDuration:
         """Test formatting duration edge cases."""
         assert format_duration(0) == "0.00s"
         assert format_duration(0.01) == "0.01s"
-
-
-class TestApplyRegexTransformations:
-    """Test cases for the _apply_regex_transformations function."""
-
-    def test_apply_regex_transformations_basic(self):
-        """Test basic regex transformations."""
-        assert _apply_regex_transformations("ACEH") == "ACEH"
-        assert _apply_regex_transformations("SUMATERA UTARA") == "SUMATERA UTARA"
-
-    def test_apply_regex_transformations_digits_newlines(self):
-        """Test regex transformations with digits and newlines."""
-        assert _apply_regex_transformations("123\nACEH") == "ACEH"
-        assert _apply_regex_transformations("ACEH\n456") == "ACEH"
-
-    def test_apply_regex_transformations_multiple_newlines(self):
-        """Test regex transformations with multiple newlines."""
-        assert _apply_regex_transformations("ACEH\n\n\nBESAR") == "ACEH BESAR"
-        assert _apply_regex_transformations("LINE1\n\nLINE2\n\n\nLINE3") == "LINE1 LINE2 LINE3"
-
-    def test_apply_regex_transformations_digits_spaces(self):
-        """Test regex transformations with digits and spaces."""
-        assert _apply_regex_transformations("123 ACEH") == "ACEH"
-        assert _apply_regex_transformations("456 SUMATERA UTARA") == "SUMATERA UTARA"
-
-    def test_apply_regex_transformations_double_spaces(self):
-        """Test regex transformations with double spaces."""
-        assert _apply_regex_transformations("ACEH  BESAR") == "ACEH BESAR"
-        assert _apply_regex_transformations("WORD1   WORD2    WORD3") == "WORD1 WORD2 WORD3"
