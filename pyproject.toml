@@ -7,13 +7,11 @@ authors = [
 ]
 license = "MIT"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
-    "camelot-py>=0.11.0",
+    "camelot-py>=1.0.9",
     "ghostscript>=0.8.1",
-    "opencv-python>=4.12.0.88",
     "pandas>=2.0.3",
-    "pypdf>=3.17.4",
     "tqdm>=4.67.1",
     "typer>=0.16.0",
 ]
@@ -44,6 +42,9 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
+markers = [
+    "e2e: end-to-end PDF extraction tests",
+]
 
 [tool.coverage.run]
 source = ["src"]
@@ -68,8 +69,3 @@ line-length = 100
 lint.select      = ["E", "F"]
 lint.ignore      = []
 fix         = true
-
-[tool.pyright]
-include          = ["src"]
-venvPath         = "."
-venv             = ".venv"

@@ -37,7 +37,7 @@ Extract tables of Indonesian administrative areas data from PDF file and save th
 ### Prerequisites
 
 - [`uv`](https://docs.astral.sh/uv/getting-started/installation) package manager
-- Python 3.10 or higher
+- Python 3.12 or higher
 
 > Tip: You can use `uv` to install Python. See the [`uv` Python installation guide](https://docs.astral.sh/uv/guides/install-python) for more details.
 
