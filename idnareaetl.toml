@@ -1,0 +1,31 @@
+[data.province]
+filename_suffix = "province"
+output_headers = ["code", "name"]
+batch_size = 500
+
+[data.regency]
+filename_suffix = "regency"
+output_headers = ["code", "province_code", "name"]
+batch_size = 500
+
+[data.district]
+filename_suffix = "district"
+output_headers = ["code", "regency_code", "name"]
+batch_size = 1000
+
+[data.village]
+filename_suffix = "village"
+output_headers = ["code", "district_code", "name"]
+batch_size = 2000
+
+[data.island]
+filename_suffix = "island"
+output_headers = [
+  "code",
+  "regency_code",
+  "coordinate",
+  "is_populated",
+  "is_outermost_small",
+  "name",
+]
+batch_size = 1000

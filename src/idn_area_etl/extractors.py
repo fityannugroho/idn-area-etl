@@ -1,13 +1,12 @@
-import csv
 import re
 from abc import ABC, abstractmethod
-from io import TextIOWrapper
 from pathlib import Path
 from types import TracebackType
-from typing import Any, Callable
+from typing import Callable
 
 import pandas as pd
 
+from idn_area_etl.config import Config, Area
 from idn_area_etl.utils import (
     PROVINCE_CODE_LENGTH,
     REGENCY_CODE_LENGTH,
@@ -19,6 +18,7 @@ from idn_area_etl.utils import (
     format_coordinate,
     normalize_words,
 )
+from idn_area_etl.writer import OutputWriter
 
 
 class TableExtractor(ABC):
@@ -29,18 +29,25 @@ class TableExtractor(ABC):
      - writes rows to its own CSV target(s) with buffering
     """
 
-    def __init__(self, destination: Path, output_name: str) -> None:
+    areas: frozenset[Area]
+    """Define which areas this extractor handles."""
+
+    def __init__(self, destination: Path, output_name: str, config: Config) -> None:
         self.destination = destination
         self.output_name = output_name
-        self.file_handles: dict[str, TextIOWrapper] = {}
-        self.writers: dict[str, Any] = {}
-        self.buffers: dict[str, list[list[str]]] = {}
-        self.batch_sizes: dict[str, int] = {}
-        self.headers: dict[str, list[str]] = {}
+        self.config = config
+
+        # resources for output management
+        self._writers: dict[Area, OutputWriter] = {
+            area: OutputWriter(
+                self.destination / f"{self.output_name}.{config.data[area].filename_suffix}.csv",
+                header=self.config.data[area].output_headers,
+            )
+            for area in self.areas
+        }
 
     def __enter__(self) -> "TableExtractor":
-        """Open all target output files and return self."""
-        self.open_outputs()
+        self._open_outputs()
         return self
 
     def __exit__(
@@ -48,76 +55,47 @@ class TableExtractor(ABC):
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         tb: TracebackType | None,
-    ) -> bool | None:
-        """Ensure outputs are flushed and closed even if an exception occurs.
+    ) -> None:
+        self._close_outputs()
 
-        Returning False (or None) lets any exception propagate (desired).
-        """
-        self.close_outputs()
-        return False
+    def _open_outputs(self) -> None:
+        for writer in self._writers.values():
+            writer.open()
 
-    @abstractmethod
-    def targets(self) -> dict[str, tuple[str, list[str], int]]:
-        """
-        Return targets mapping:
-          key -> (filename_suffix, headers, batch_size)
-        e.g. for island: {"island": ("island", ["code","parent",...], 1000)}
-        """
-        ...
+    def _close_outputs(self) -> None:
+        for writer in self._writers.values():
+            writer.flush()
+            writer.close()
 
-    def open_outputs(self) -> None:
-        for key, (suffix, headers, batch) in self.targets().items():
-            path = self.destination / f"{self.output_name}.{suffix}.csv"
-            fh = open(path, mode="w", newline="", encoding="utf-8", buffering=1048576)
-            writer = csv.writer(fh)
-            writer.writerow(headers)
-            self.file_handles[key] = fh
-            self.writers[key] = writer
-            self.buffers[key] = []
-            self.headers[key] = headers
-            self.batch_sizes[key] = batch
-
-    def close_outputs(self) -> None:
-        for key in list(self.file_handles.keys()):
-            self.flush(key)
-            try:
-                self.file_handles[key].close()
-            except Exception:
-                pass
-        self.file_handles.clear()
-        self.writers.clear()
-        self.buffers.clear()
-
-    def flush(self, key: str) -> None:
-        buf = self.buffers.get(key, [])
-        if buf:
-            self.writers[key].writerows(buf)
-            self.file_handles[key].flush()
-            self.buffers[key] = []
-
-    def write_rows(self, key: str, rows: list[list[str]]) -> None:
+    def _write_rows(self, area: Area, rows: list[list[str]]) -> None:
         if not rows:
             return
-        self.buffers[key].extend(rows)
-        if len(self.buffers[key]) >= self.batch_sizes[key]:
-            self.flush(key)
+
+        self._writers[area].add(rows)
+
+        if len(self._writers[area]) >= self.config.data[area].batch_size:
+            self._writers[area].flush()
 
     @abstractmethod
-    def matches(self, df: pd.DataFrame) -> bool: ...
+    def matches(self, df: pd.DataFrame) -> bool:
+        """Return True if this extractor can handle the given table."""
+        ...
 
     @abstractmethod
-    def extract_rows(self, df: pd.DataFrame) -> dict[str, list[list[str]]]:
+    def _extract_rows(self, df: pd.DataFrame) -> dict[Area, list[list[str]]]:
         """
-        Returns a dict keyed by target key (same as in self.targets())
-        with lists of rows already matching final CSV schema.
+        Extract rows from the given DataFrame, grouped by area key.
+        Return a dict mapping area key -> list of rows (as list of strings).
         """
         ...
 
     def extract_and_write(self, df: pd.DataFrame) -> int:
-        data = self.extract_rows(df)
+        """Extract rows from the given DataFrame and write them to output files."""
+
+        data = self._extract_rows(df)
         total = 0
         for key, rows in data.items():
-            self.write_rows(key, rows)
+            self._write_rows(key, rows)
             total += len(rows)
         return total
 
@@ -127,17 +105,11 @@ class AreaExtractor(TableExtractor):
     Handle four outputs at once: province/regency/district/village.
     """
 
-    def __init__(self, destination: Path, output_name: str) -> None:
-        super().__init__(destination, output_name)
-        self._seen_provinces: set[str] = set()
+    areas = frozenset({"province", "regency", "district", "village"})
 
-    def targets(self) -> dict[str, tuple[str, list[str], int]]:
-        return {
-            "province": ("province", ["code", "name"], 500),
-            "regency": ("regency", ["code", "province_code", "name"], 500),
-            "district": ("district", ["code", "regency_code", "name"], 1000),
-            "village": ("village", ["code", "district_code", "name"], 2000),
-        }
+    def __init__(self, destination: Path, output_name: str, config: Config) -> None:
+        super().__init__(destination, output_name, config=config)
+        self._seen_provinces: set[str] = set()
 
     def matches(self, df: pd.DataFrame) -> bool:
         if df.empty or df.shape[0] < 1:
@@ -182,8 +154,8 @@ class AreaExtractor(TableExtractor):
         mask = codes.ne("") & names.ne("")
         return list(zip(codes[mask].tolist(), names[mask].tolist()))
 
-    def extract_rows(self, df: pd.DataFrame) -> dict[str, list[list[str]]]:
-        rows_by_key: dict[str, list[list[str]]] = {
+    def _extract_rows(self, df: pd.DataFrame) -> dict[Area, list[list[str]]]:
+        rows_by_key: dict[Area, list[list[str]]] = {
             "province": [],
             "regency": [],
             "district": [],
@@ -209,21 +181,7 @@ class IslandExtractor(TableExtractor):
     Output schema (one file): code,regency_code,coordinate,is_populated,is_outermost_small,name
     """
 
-    def targets(self) -> dict[str, tuple[str, list[str], int]]:
-        return {
-            "island": (
-                "island",
-                [
-                    "code",
-                    "regency_code",
-                    "coordinate",
-                    "is_populated",
-                    "is_outermost_small",
-                    "name",
-                ],
-                1000,
-            )
-        }
+    areas = frozenset({"island"})
 
     # ---------- header helpers (compact) ----------
     @staticmethod
@@ -289,7 +247,7 @@ class IslandExtractor(TableExtractor):
         prov, reg, _ = code.split(".")
         return f"{prov}.{reg}" if reg != "00" else None
 
-    def extract_rows(self, df: pd.DataFrame) -> dict[str, list[list[str]]]:
+    def _extract_rows(self, df: pd.DataFrame) -> dict[Area, list[list[str]]]:
         # locate header row once
         header_idx: int | None = None
         for i in range(min(4, len(df))):

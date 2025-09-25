@@ -1,15 +1,107 @@
+import csv
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
-from idn_area_etl.extractors import AreaExtractor, IslandExtractor
 from idn_area_etl.utils import (
     PROVINCE_CODE_LENGTH,
     REGENCY_CODE_LENGTH,
     DISTRICT_CODE_LENGTH,
     VILLAGE_CODE_LENGTH,
 )
+from idn_area_etl.config import Config, DataConfig
+from idn_area_etl.extractors import AreaExtractor, IslandExtractor
+from idn_area_etl.writer import OutputWriter
+
+
+# ---------- Test config fixture ----------
+
+
+@pytest.fixture()
+def config() -> Config:
+    """Provide a minimal configuration compatible with the production extractors."""
+
+    return Config(
+        data={
+            "province": DataConfig(
+                batch_size=2,
+                output_headers=("code", "name"),
+                filename_suffix="province",
+            ),
+            "regency": DataConfig(
+                batch_size=2,
+                output_headers=("code", "province_code", "name"),
+                filename_suffix="regency",
+            ),
+            "district": DataConfig(
+                batch_size=2,
+                output_headers=("code", "regency_code", "name"),
+                filename_suffix="district",
+            ),
+            "village": DataConfig(
+                batch_size=2,
+                output_headers=("code", "district_code", "name"),
+                filename_suffix="village",
+            ),
+            "island": DataConfig(
+                batch_size=2,
+                output_headers=(
+                    "code",
+                    "regency_code",
+                    "coordinate",
+                    "is_populated",
+                    "is_outermost_small",
+                    "name",
+                ),
+                filename_suffix="island",
+            ),
+        }
+    )
+
+
+def _area_extractor(tmp_path: Path, config: Config, output_name: str = "x") -> AreaExtractor:
+    return AreaExtractor(destination=tmp_path, output_name=output_name, config=config)
+
+
+def _island_extractor(tmp_path: Path, config: Config, output_name: str = "x") -> IslandExtractor:
+    return IslandExtractor(destination=tmp_path, output_name=output_name, config=config)
+
+
+def _read_rows(tmp_path: Path, output_name: str, suffix: str) -> list[list[str]]:
+    path = tmp_path / f"{output_name}.{suffix}.csv"
+    if not path.exists():
+        return []
+
+    with path.open(newline="", encoding="utf-8") as fp:
+        rows = list(csv.reader(fp))
+
+    return rows[1:] if len(rows) > 1 else []
+
+
+def _run_area_extraction(
+    df: pd.DataFrame, tmp_path: Path, config: Config, *, output_name: str = "x"
+) -> tuple[int, dict[str, list[list[str]]]]:
+    with _area_extractor(tmp_path, config, output_name) as ex:
+        count = ex.extract_and_write(df)
+
+    outputs = {
+        "province": _read_rows(tmp_path, output_name, "province"),
+        "regency": _read_rows(tmp_path, output_name, "regency"),
+        "district": _read_rows(tmp_path, output_name, "district"),
+        "village": _read_rows(tmp_path, output_name, "village"),
+    }
+
+    return count, outputs
+
+
+def _run_island_extraction(
+    df: pd.DataFrame, tmp_path: Path, config: Config, *, output_name: str = "x"
+) -> tuple[int, dict[str, list[list[str]]]]:
+    with _island_extractor(tmp_path, config, output_name) as ex:
+        count = ex.extract_and_write(df)
+
+    return count, {"island": _read_rows(tmp_path, output_name, "island")}
 
 
 # ---------- Helpers to fabricate DataFrames like Camelot ----------
@@ -315,33 +407,33 @@ def _df_island_messy():
 class TestAreaExtractor:
     """Test cases for the AreaExtractor class."""
 
-    def test_matches_true(self, tmp_path: Path):
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
+    def test_matches_true(self, tmp_path: Path, config: Config):
+        ex = _area_extractor(tmp_path, config)
         assert ex.matches(_df_area())
 
-    def test_matches_false(self, tmp_path: Path):
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
+    def test_matches_false(self, tmp_path: Path, config: Config):
+        ex = _area_extractor(tmp_path, config)
         assert not ex.matches(_df_area_unmatched())
         assert not ex.matches(_df_island())
 
-    def test_matches_empty_dataframe(self, tmp_path: Path):
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
+    def test_matches_empty_dataframe(self, tmp_path: Path, config: Config):
+        ex = _area_extractor(tmp_path, config)
         assert not ex.matches(pd.DataFrame())
 
-    def test_matches_insufficient_columns(self, tmp_path: Path):
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
+    def test_matches_insufficient_columns(self, tmp_path: Path, config: Config):
+        ex = _area_extractor(tmp_path, config)
         # DataFrame with only 1 column
         df = pd.DataFrame([["K O D E"]])
         assert not ex.matches(df)
 
-    def test_extract_rows_happy_path(self, tmp_path: Path):
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
-        out = ex.extract_rows(_df_area())
+    def test_extract_rows_happy_path(self, tmp_path: Path, config: Config):
+        count, outputs = _run_area_extraction(_df_area(), tmp_path, config)
 
-        assert out["province"] == [["11", "Aceh"]]
-        assert out["regency"] == [["11.01", "11", "Kabupaten Aceh Selatan"]]
-        assert out["district"] == [["11.01.01", "11.01", "Bakongan"]]
-        assert out["village"] == [
+        assert count == 7
+        assert outputs["province"] == [["11", "Aceh"]]
+        assert outputs["regency"] == [["11.01", "11", "Kabupaten Aceh Selatan"]]
+        assert outputs["district"] == [["11.01.01", "11.01", "Bakongan"]]
+        assert outputs["village"] == [
             ["11.01.01.2001", "11.01.01", "Keude Bakongan"],
             ["11.01.01.2002", "11.01.01", "Ujong Mangki"],
             ["11.01.01.2003", "11.01.01", "Ujong Padang"],
@@ -354,21 +446,20 @@ class TestAreaExtractor:
         assert len("11.01.02") == DISTRICT_CODE_LENGTH
         assert len("11.01.01.2001") == VILLAGE_CODE_LENGTH
 
-    def test_extract_rows_empty_dataframe(self, tmp_path: Path):
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
-        out = ex.extract_rows(pd.DataFrame())
-        assert out == {"province": [], "regency": [], "district": [], "village": []}
+    def test_extract_rows_empty_dataframe(self, tmp_path: Path, config: Config):
+        count, outputs = _run_area_extraction(pd.DataFrame(), tmp_path, config)
+        assert count == 0
+        assert outputs == {"province": [], "regency": [], "district": [], "village": []}
 
-    def test_extract_rows_insufficient_columns(self, tmp_path: Path):
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
+    def test_extract_rows_insufficient_columns(self, tmp_path: Path, config: Config):
         # DataFrame with only one column
         df = pd.DataFrame([["K O D E"], ["11"], ["11.01"]])
-        out = ex.extract_rows(df)
-        assert out == {"province": [], "regency": [], "district": [], "village": []}
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+        assert count == 0
+        assert outputs == {"province": [], "regency": [], "district": [], "village": []}
 
-    def test_extract_rows_six_column_table(self, tmp_path: Path):
+    def test_extract_rows_six_column_table(self, tmp_path: Path, config: Config):
         # Test 6-column table variant (uses columns [1, 3] for names)
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
         df_6col = pd.DataFrame(
             [
                 ["K O D E", "NAMA", "COL2", "BACKUP_NAME", "COL4", "COL5"],
@@ -377,13 +468,13 @@ class TestAreaExtractor:
                 ["11.01", "", "", "Kabupaten Aceh Selatan", "", ""],
             ]
         )
-        out = ex.extract_rows(df_6col)
-        assert out["province"] == [["11", "Aceh"]]
-        assert out["regency"] == [["11.01", "11", "Kabupaten Aceh Selatan"]]
+        count, outputs = _run_area_extraction(df_6col, tmp_path, config)
+        assert count == 2
+        assert outputs["province"] == [["11", "Aceh"]]
+        assert outputs["regency"] == [["11.01", "11", "Kabupaten Aceh Selatan"]]
 
-    def test_extract_rows_duplicate_province(self, tmp_path: Path):
+    def test_extract_rows_duplicate_province(self, tmp_path: Path, config: Config):
         # Test that duplicate provinces are not added twice
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
         df_dup = pd.DataFrame(
             [
                 ["K O D E", "NAMA", "COL2", "COL3", "COL4", "COL5", "COL6"],
@@ -392,32 +483,30 @@ class TestAreaExtractor:
                 ["11", "Aceh", "", "", "", "", ""],  # Duplicate
             ]
         )
-        out = ex.extract_rows(df_dup)
-        # Should only have one province entry
-        assert len(out["province"]) == 1
-        assert out["province"] == [["11", "Aceh"]]
+        count, outputs = _run_area_extraction(df_dup, tmp_path, config)
+        assert count == 1
+        assert outputs["province"] == [["11", "Aceh"]]
 
 
 # ---------- Tests for IslandExtractor ----------
 class TestIslandExtractor:
     """Test cases for the IslandExtractor class."""
 
-    def test_matches_true(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
+    def test_matches_true(self, tmp_path: Path, config: Config):
+        ex = _island_extractor(tmp_path, config)
         assert ex.matches(_df_island())
 
-    def test_matches_false(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
+    def test_matches_false(self, tmp_path: Path, config: Config):
+        ex = _island_extractor(tmp_path, config)
         assert not ex.matches(_df_area())
         assert not ex.matches(_df_area_unmatched())
 
-    def test_extract_empty_dataframe(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
-        out = ex.extract_rows(pd.DataFrame())
-        assert out == {"island": []}
+    def test_extract_empty_dataframe(self, tmp_path: Path, config: Config):
+        count, outputs = _run_island_extraction(pd.DataFrame(), tmp_path, config)
+        assert count == 0
+        assert outputs == {"island": []}
 
-    def test_extract_no_header_found(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
+    def test_extract_no_header_found(self, tmp_path: Path, config: Config):
         # DataFrame without island header
         df = pd.DataFrame(
             [
@@ -425,22 +514,22 @@ class TestIslandExtractor:
                 ["11.01", "Something"],
             ]
         )
-        out = ex.extract_rows(df)
-        assert out == {"island": []}
+        count, outputs = _run_island_extraction(df, tmp_path, config)
+        assert count == 0
+        assert outputs == {"island": []}
 
-    def test_extract_header_found_but_no_data(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
+    def test_extract_header_found_but_no_data(self, tmp_path: Path, config: Config):
         # DataFrame with header but no data rows
         df = pd.DataFrame(
             [
                 ["Kode Pulau", "Nama", "Koordinat"],
             ]
         )
-        out = ex.extract_rows(df)
-        assert out == {"island": []}
+        count, outputs = _run_island_extraction(df, tmp_path, config)
+        assert count == 0
+        assert outputs == {"island": []}
 
-    def test_extract_invalid_island_codes(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
+    def test_extract_invalid_island_codes(self, tmp_path: Path, config: Config):
         # DataFrame with invalid island codes
         df = pd.DataFrame(
             [
@@ -450,13 +539,13 @@ class TestIslandExtractor:
                 ["11.01.4000X", "Invalid char"],  # Invalid character
             ]
         )
-        out = ex.extract_rows(df)
-        assert out == {"island": []}
+        count, outputs = _run_island_extraction(df, tmp_path, config)
+        assert count == 0
+        assert outputs == {"island": []}
 
-    def test_extract(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
-        out = ex.extract_rows(_df_island())["island"]
-        assert out == [
+    def test_extract(self, tmp_path: Path, config: Config):
+        count, outputs = _run_island_extraction(_df_island(), tmp_path, config)
+        expected = [
             [
                 "11.01.40001",
                 "11.01",
@@ -499,20 +588,21 @@ class TestIslandExtractor:
                 "Pulau Bateeleblah",
             ],
         ]
+        assert count == len(expected)
+        assert outputs["island"] == expected
 
-    def test_extract_messy_and_regencyless(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
-        out = ex.extract_rows(_df_island_messy())["island"]
-        assert out == [
+    def test_extract_messy_and_regencyless(self, tmp_path: Path, config: Config):
+        count, outputs = _run_island_extraction(_df_island_messy(), tmp_path, config)
+        expected = [
             ["12.00.40001", "", "01°22'40.00\" N 120°53'04.00\" E", "1", "1", "Pulau 1"],
             ["12.00.40002", "", "03°31'33.49\" N 125°39'37.53\" E", "0", "1", "Pulau 2"],
             ["12.01.40003", "12.01", "01°18'47.00\" N 124°30'46.00\" E", "0", "0", "Pulau 3"],
             ["12.01.40004", "12.01", "01°22'40.00\" N 120°53'04.00\" E", "0", "0", "Pulau 4"],
         ]
+        assert count == len(expected)
+        assert outputs["island"] == expected
 
-    def test_extract_rows_parent_from_code_paths(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
-
+    def test_extract_rows_parent_from_code_paths(self, tmp_path: Path, config: Config):
         df = pd.DataFrame(
             [
                 # headers — include 'kode' and 'pulau' to let extractor find columns
@@ -524,15 +614,15 @@ class TestIslandExtractor:
             ]
         )
 
-        out = ex.extract_rows(df)["island"]
+        count, outputs = _run_island_extraction(df, tmp_path, config)
+        out = outputs["island"]
         # Row 0: parent should be "12.01"
         assert out[0][0] == "12.01.40003" and out[0][1] == "12.01"
         # Row 1: parent None -> ''
         assert out[1][0] == "12.00.40001" and out[1][1] == ""
+        assert count == 2
 
-    def test_extract_rows_find_name_col_keyword_and_fallback(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
-
+    def test_extract_rows_find_name_col_keyword_and_fallback(self, tmp_path: Path, config: Config):
         # Case A: keyword 'pulau' (non-code) used for "nama" column
         df_a = pd.DataFrame(
             [
@@ -540,7 +630,8 @@ class TestIslandExtractor:
                 ["1", "12.01.40004", "Pulau X", "01°22'40.00\" U 120°53'04.00\" T"],
             ]
         )
-        out_a = ex.extract_rows(df_a)["island"]
+        _, outputs_a = _run_island_extraction(df_a, tmp_path, config, output_name="case_a")
+        out_a = outputs_a["island"]
         assert out_a and out_a[0][-1] == "Pulau X"
 
         # Case B: no 'pulau' in headers, fallback to idx_code + 1
@@ -550,10 +641,13 @@ class TestIslandExtractor:
                 ["1", "12.01.40005", "Pulau Y", "01°22'40.00\" U 120°53'04.00\" T"],
             ]
         )
-        out_b = ex.extract_rows(df_b)["island"]
+        _, outputs_b = _run_island_extraction(df_b, tmp_path, config, output_name="case_b")
+        out_b = outputs_b["island"]
         assert out_b and out_b[0][-1] == "Pulau Y"  # taken from column next to code
 
-    def test_island_extract_rows_name_equals_code_uses_next_col(self, tmp_path: Path):
+    def test_island_extract_rows_name_equals_code_uses_next_col(
+        self, tmp_path: Path, config: Config
+    ):
         """
         Hit the branch:
             if name == code and idx_code is not None and idx_code + 1 < len(r):
@@ -561,8 +655,6 @@ class TestIslandExtractor:
                 if name2 and name2 != code:
                     name = name2
         """
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
-
         df = pd.DataFrame(
             [
                 ["no", "kode pulau", "nama sebelah", "nama pulau", "koordinat"],
@@ -571,12 +663,13 @@ class TestIslandExtractor:
                 ["1", "12.01.40003", "Pulau 3", "12.01.40003", "01°18'47.00\" U 124°30'46.00\" T"],
             ]
         )
-        out = ex.extract_rows(df)["island"]
+        _, outputs = _run_island_extraction(df, tmp_path, config, output_name="case_c")
+        out = outputs["island"]
         assert out and out[0][0] == "12.01.40003" and out[0][-1] == "Pulau 3"
 
-    def test_extract_rows_uses_next_to_code_when_name_equals_code(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
-
+    def test_extract_rows_uses_next_to_code_when_name_equals_code(
+        self, tmp_path: Path, config: Config
+    ):
         # Header order matters:
         # - "kode pulau" at index 1 -> idx_code = 1
         # - "sebelah kode" at index 2 -> this is (idx_code + 1), the fallback source
@@ -589,22 +682,22 @@ class TestIslandExtractor:
                 ["1", "12.01.40003", "Pulau 3", "12.01.40003", "01°18'47.00\" U 124°30'46.00\" T"],
             ]
         )
-
-        out = ex.extract_rows(df)["island"]
+        _, outputs = _run_island_extraction(df, tmp_path, config, output_name="case_d")
+        out = outputs["island"]
         assert out and out[0][0] == "12.01.40003"
         # Name should be taken from (idx_code + 1) i.e., "sebelah kode"
         assert out[0][-1] == "Pulau 3"
         # (Optional) also ensure coordinate normalized
         assert out[0][2] == "01°18'47.00\" N 124°30'46.00\" E"
 
-    def test_island_extract_rows_returns_empty_when_no_kode_column(self, tmp_path: Path):
+    def test_island_extract_rows_returns_empty_when_no_kode_column(
+        self, tmp_path: Path, config: Config
+    ):
         """
         Cover IslandExtractor._find_code_col branch that returns None
         by providing headers without any 'kode' substring.
         Via public API, this should produce no output rows.
         """
-        ex = IslandExtractor(destination=tmp_path, output_name="x")
-
         df = pd.DataFrame(
             [
                 ["no", "identifikasi", "nama pulau", "koordinat"],
@@ -612,111 +705,104 @@ class TestIslandExtractor:
             ]
         )
 
-        out = ex.extract_rows(df)["island"]
-        assert out == []
+        count, outputs = _run_island_extraction(df, tmp_path, config)
+        assert count == 0
+        assert outputs["island"] == []
 
 
-# ---------- IO behavior via TableExtractor (open/flush/close/write) ----------
+# ---------- IO behavior via TableExtractor (public API) ----------
 class TestTableExtractorIO:
-    """Test open_outputs, write_rows, flush, close_outputs via a concrete extractor."""
+    """Exercise extractor IO flows using only the public interface."""
 
-    def test_write_and_persist_csv(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="sample")
-        ex.open_outputs()
-        try:
-            rows = [
-                ["11.01.40001", "11.01", "03°19'03.44\" N 097°07'41.73\" E", "0", "0", "Pulau X"]
+    def test_extract_and_persist_csv(self, tmp_path: Path, config: Config) -> None:
+        df = pd.DataFrame(
+            [
+                ["header", "kode pulau", "nama", "koordinat", "status"],
+                ["1", "12.01.40001", "Pulau X", "03°19'03.44\" U 097°07'41.73\" T", "BP"],
             ]
-            ex.write_rows("island", rows)
-            ex.flush("island")
-        finally:
-            ex.close_outputs()
+        )
 
-        out_path = tmp_path / "sample.island.csv"
-        assert out_path.exists()
-        content = out_path.read_text(encoding="utf-8").splitlines()
-        assert content[0].split(",") == [
-            "code",
-            "regency_code",
-            "coordinate",
-            "is_populated",
-            "is_outermost_small",
-            "name",
+        count, outputs = _run_island_extraction(df, tmp_path, config, output_name="sample")
+        assert count == 1
+        assert outputs["island"] == [
+            ["12.01.40001", "12.01", "03°19'03.44\" N 097°07'41.73\" E", "1", "0", "Pulau X"]
         ]
-        assert "Pulau X" in content[1]
-
-    def test_write_empty_rows(self, tmp_path: Path):
-        ex = IslandExtractor(destination=tmp_path, output_name="sample")
-        ex.open_outputs()
-        try:
-            # Write empty rows should not cause error
-            ex.write_rows("island", [])
-            ex.flush("island")
-        finally:
-            ex.close_outputs()
 
         out_path = tmp_path / "sample.island.csv"
-        assert out_path.exists()
         content = out_path.read_text(encoding="utf-8").splitlines()
-        # Should only have header
-        assert len(content) == 1
+        assert content[0].startswith("code,regency_code")
 
-    def test_context_manager_exception_handling(self, tmp_path: Path):
-        # Test that files are properly closed even when exception occurs
-        with IslandExtractor(destination=tmp_path, output_name="sample") as ex:
-            rows = [
-                ["11.01.40001", "11.01", "03°19'03.44\" N 097°07'41.73\" E", "0", "0", "Pulau X"]
+    def test_extract_and_write_empty_result(self, tmp_path: Path, config: Config) -> None:
+        count, outputs = _run_island_extraction(
+            pd.DataFrame(), tmp_path, config, output_name="empty"
+        )
+        assert count == 0
+        assert outputs["island"] == []
+
+        out_path = tmp_path / "empty.island.csv"
+        lines = out_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1  # header only
+
+    def test_context_manager_exception_handling(self, tmp_path: Path, config: Config) -> None:
+        df = pd.DataFrame(
+            [
+                ["header", "kode pulau", "nama", "koordinat", "status"],
+                ["1", "12.01.40001", "Pulau X", "03°19'03.44\" U 097°07'41.73\" T", "BP"],
             ]
-            ex.write_rows("island", rows)
-            # Simulate an exception
-            try:
+        )
+
+        with pytest.raises(ValueError):
+            with _island_extractor(tmp_path, config, output_name="ctx") as ex:
+                ex.extract_and_write(df)
                 raise ValueError("Test exception")
-            except ValueError:
-                pass
 
-        # File should still be properly written and closed
-        out_path = tmp_path / "sample.island.csv"
+        out_path = tmp_path / "ctx.island.csv"
         assert out_path.exists()
-        content = out_path.read_text(encoding="utf-8").splitlines()
-        assert len(content) == 2  # header + data
+        rows = list(csv.reader(out_path.open(newline="", encoding="utf-8")))
+        assert len(rows) == 2
 
-    def test_close_outputs_with_file_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        # Test error handling in close_outputs
-        ex = IslandExtractor(destination=tmp_path, output_name="sample")
-        ex.open_outputs()
-
-        # Mock file close to raise an exception
-        def error_close():
+    def test_extract_and_write_propagates_close_errors(
+        self, tmp_path: Path, config: Config, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def error_close(self: OutputWriter) -> None:
             raise OSError("File close error")
 
-        ex.file_handles["island"].close = error_close
+        monkeypatch.setattr(OutputWriter, "close", error_close)
 
-        # Should not raise exception even if file close fails
-        ex.close_outputs()
+        df = pd.DataFrame(
+            [
+                ["header", "kode pulau", "nama", "koordinat", "status"],
+                ["1", "12.01.40001", "Pulau X", "03°19'03.44\" U 097°07'41.73\" T", "BP"],
+            ]
+        )
 
-        # Verify cleanup still happened
-        assert len(ex.file_handles) == 0
-        assert len(ex.writers) == 0
-        assert len(ex.buffers) == 0
+        with pytest.raises(OSError):
+            with _island_extractor(tmp_path, config, output_name="err") as ex:
+                ex.extract_and_write(df)
 
-    def test_write_rows_triggers_flush(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-        ex = AreaExtractor(destination=tmp_path, output_name="x")
+    def test_repeated_extract_and_write_appends_rows(self, tmp_path: Path, config: Config) -> None:
+        df_province = pd.DataFrame(
+            [
+                ["K O D E", "NAMA", "COL2", "COL3", "ALT1", "ALT2", "ALT3"],
+                ["", "", "", "", "", "", ""],
+                ["11", "Aceh", "", "", "", "", ""],
+            ]
+        )
 
-        # Prepare buffer and tiny batch size for a single key, e.g., 'province'
-        ex.buffers = {"province": []}
-        ex.batch_sizes = {"province": 2}
+        df_regency = pd.DataFrame(
+            [
+                ["K O D E", "NAMA", "COL2", "COL3", "ALT1", "ALT2", "ALT3"],
+                ["", "", "", "", "", "", ""],
+                ["11.02", "", "", "", "Kabupaten Aceh Barat", "", ""],
+            ]
+        )
 
-        calls: list[str] = []
+        with _area_extractor(tmp_path, config, output_name="multi") as ex:
+            ex.extract_and_write(df_province)
+            ex.extract_and_write(df_regency)
 
-        def fake_flush(k: str) -> None:
-            calls.append(k)
-            # mimic clearing buffer like real flush would typically do:
-            ex.buffers[k].clear()
+        province_rows = _read_rows(tmp_path, "multi", "province")
+        regency_rows = _read_rows(tmp_path, "multi", "regency")
 
-        monkeypatch.setattr(ex, "flush", fake_flush)
-
-        ex.write_rows("province", [["11", "Aceh"]])  # size=1 -> no flush
-        assert calls == []
-
-        ex.write_rows("province", [["12", "Sumatera Utara"]])  # size=2 -> flush happens
-        assert calls == ["province"]
+        assert province_rows == [["11", "Aceh"]]
+        assert regency_rows == [["11.02", "11", "Kabupaten Aceh Barat"]]

@@ -12,6 +12,7 @@ from pypdf import PdfReader
 from tqdm import tqdm
 import typer
 
+from idn_area_etl.config import AppConfig, ConfigError
 from idn_area_etl.extractors import AreaExtractor, IslandExtractor, TableExtractor
 from idn_area_etl.utils import (
     chunked,
@@ -82,6 +83,16 @@ def extract(
     chunk_size: Annotated[
         int, typer.Option("--chunk-size", "-c", help="Number of pages to read per chunk")
     ] = 3,
+    config_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--config",
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+            help="Path to the configuration TOML file",
+        ),
+    ] = None,
     page_range: Annotated[
         str | None,
         typer.Option("--range", "-r", help="Specific pages to extract, e.g., '1,3,4' or '1-4,6'"),
@@ -126,6 +137,12 @@ def extract(
     typer.echo("\n🏁 Program started")
     start_time = time.time()
 
+    try:
+        config = AppConfig.load(config_path) if config_path else AppConfig.load()
+    except ConfigError as exc:
+        typer.echo(f"❌ Configuration error: {exc}")
+        raise typer.Exit(code=1)
+
     reader = PdfReader(str(pdf_path))
     total_pages = len(reader.pages)
     pages_to_extract = (
@@ -137,8 +154,8 @@ def extract(
     extracted_count = 0
     # Use context managers to guarantee file handles are closed on unexpected exceptions
     with (
-        AreaExtractor(destination, output_name) as area_extractor,
-        IslandExtractor(destination, output_name) as island_extractor,
+        AreaExtractor(destination, output_name, config) as area_extractor,
+        IslandExtractor(destination, output_name, config) as island_extractor,
     ):
         extractors: list[TableExtractor] = [area_extractor, island_extractor]
 
@@ -164,9 +181,9 @@ def extract(
                     continue
 
                 for table in page_tables:
+                    df = table.df
                     for ex in extractors:
                         try:
-                            df = table.df
                             if ex.matches(df):
                                 extracted_count += ex.extract_and_write(df)
                                 break  # stop at first matching extractor

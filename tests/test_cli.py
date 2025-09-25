@@ -8,6 +8,7 @@ import pytest
 import typer
 
 from idn_area_etl.cli import extract, version_option_callback, handle_sigint
+from idn_area_etl.config import Config, ConfigError
 
 
 class _StubTable:
@@ -368,6 +369,33 @@ class TestExtractFunction:
                 version=None,
             )
         assert e.value.exit_code == 1
+
+    def test_extract_handles_config_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        pdf_file = tmp_path / "input.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4\n%fake")
+        dest = tmp_path / "out"
+
+        from idn_area_etl import cli as cli_mod
+
+        class _FailingAppConfig:
+            @classmethod
+            def load(cls, *args: object, **kwargs: object) -> Config:
+                raise ConfigError("Broken config")
+
+        monkeypatch.setattr(cli_mod, "AppConfig", _FailingAppConfig)
+
+        with pytest.raises(typer.Exit) as exc_info:
+            cli_mod.extract(
+                pdf_path=pdf_file,
+                chunk_size=1,
+                page_range=None,
+                output="ok",
+                destination=dest,
+                parallel=False,
+                version=None,
+            )
+
+        assert exc_info.value.exit_code == 1
 
 
 class TestSignalHandler:
