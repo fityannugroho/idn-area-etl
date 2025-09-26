@@ -1,6 +1,6 @@
 [project]
 name = "idn-area-etl"
-version = "0.1.0"
+version = "0.1.1"
 description = "CLI for extracting indonesia area codes and names from PDF tables and converting them to structured CSV format."
 authors = [
     { name = "fityannugroho", email = "fityannugroho@gmail.com" }

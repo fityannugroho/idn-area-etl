@@ -7,15 +7,18 @@ The extractor processes PDF tables containing area codes and names for provinces
 ## Usage
 
 ```
-Usage: idn-area-etl [OPTIONS] PDF_PATH
+Usage: idnareaetl [OPTIONS] PDF_PATH
 
-Extract tables of Indonesian administrative areas data from PDF file and save the cleaned data to a CSV file.
+Extract tables of Indonesian administrative areas and islands from PDF. All cleansing,
+mapping to final schema, and CSV writing are handled by extractors.
 
 ╭─ Arguments ──────────────────────────────────────────────────────────────────────────────╮
 │ *    pdf_path      FILE  Path to the PDF file [default: None] [required]                 │
 ╰──────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Options ────────────────────────────────────────────────────────────────────────────────╮
 │ --chunk-size          -c      INTEGER    Number of pages to read per chunk [default: 3]  │
+│ --config                      FILE       Path to the configuration TOML file             │
+│                                          [default: None]                                 │
 │ --range               -r      TEXT       Specific pages to extract, e.g., '1,3,4' or     │
 │                                          '1-4,6'                                         │
 │                                          [default: None]                                 │
@@ -73,3 +76,9 @@ To build the package, you can use the `uv` command:
 ```bash
 uv build
 ```
+
+## Configuration
+
+You can customize the behavior of the program by providing a configuration file in TOML format and passing its path using the `--config` option.
+
+If no `--config` option is provided, the program will look for a default configuration file in [`idnareaetl.toml`](idnareaetl.toml).
