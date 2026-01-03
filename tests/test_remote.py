@@ -585,7 +585,7 @@ class TestGitHubToken:
 
         mocker.patch("idn_area_etl.remote._download_and_extract_zipball", side_effect=mock_download)
 
-        _  = get_default_ground_truth_path()
+        _ = get_default_ground_truth_path()
 
         # Verify Authorization header was included
         call_args = mock_client.get.call_args
@@ -623,7 +623,7 @@ class TestGitHubToken:
 
         mocker.patch("idn_area_etl.remote._download_and_extract_zipball", side_effect=mock_download)
 
-        _  = get_default_ground_truth_path()
+        _ = get_default_ground_truth_path()
 
         # Verify Authorization header was NOT included
         call_args = mock_client.get.call_args

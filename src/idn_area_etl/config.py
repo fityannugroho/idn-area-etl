@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast, runtime_checkable
 
-
 Area = Literal["province", "regency", "district", "village", "island"]
 DEFAULT_CONFIG_FILENAME = "idnareaetl.toml"
 

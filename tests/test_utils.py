@@ -1,22 +1,23 @@
 import math
+
 import pytest
 
 from idn_area_etl.utils import (
-    PROVINCE_CODE_LENGTH,
-    REGENCY_CODE_LENGTH,
     DISTRICT_CODE_LENGTH,
-    VILLAGE_CODE_LENGTH,
+    PROVINCE_CODE_LENGTH,
     RE_ISLAND_CODE,
+    REGENCY_CODE_LENGTH,
+    VILLAGE_CODE_LENGTH,
+    chunked,
     clean_name,
     fix_wrapped_name,
-    normalize_words,
     format_coordinate,
-    chunked,
-    validate_page_range,
-    parse_page_range,
     format_duration,
-    is_fuzzy_match,
     is_fuzzy_contained,
+    is_fuzzy_match,
+    normalize_words,
+    parse_page_range,
+    validate_page_range,
 )
 
 

@@ -4,16 +4,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from idn_area_etl.utils import (
-    PROVINCE_CODE_LENGTH,
-    REGENCY_CODE_LENGTH,
-    DISTRICT_CODE_LENGTH,
-    VILLAGE_CODE_LENGTH,
-)
 from idn_area_etl.config import Config, DataConfig
 from idn_area_etl.extractors import AreaExtractor, IslandExtractor
+from idn_area_etl.utils import (
+    DISTRICT_CODE_LENGTH,
+    PROVINCE_CODE_LENGTH,
+    REGENCY_CODE_LENGTH,
+    VILLAGE_CODE_LENGTH,
+)
 from idn_area_etl.writer import OutputWriter
-
 
 # ---------- Test config fixture ----------
 

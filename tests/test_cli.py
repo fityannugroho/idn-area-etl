@@ -1,13 +1,13 @@
 import os
+import signal
 from pathlib import Path
 from typing import Any
-import signal
 
 import pandas as pd
 import pytest
 import typer
 
-from idn_area_etl.cli import extract, version_option_callback, handle_sigint
+from idn_area_etl.cli import extract, handle_sigint, version_option_callback
 from idn_area_etl.config import Config, ConfigError
 
 
@@ -528,6 +528,7 @@ class TestVersionOptionCallback:
         self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ):
         from importlib.metadata import PackageNotFoundError
+
         from idn_area_etl import cli as cli_mod
 
         def _raise(_: str) -> None:
@@ -553,6 +554,7 @@ class TestNormalizeCommand:
         (gt_dir / "province.csv").write_text("code,name\n11,ACEH\n")
 
         from typer.testing import CliRunner
+
         from idn_area_etl.cli import app
 
         runner = CliRunner()
@@ -572,6 +574,7 @@ class TestNormalizeCommand:
         input_file.write_text("code,name\n11,ACEH\n12,SUMATERA UTARA\n")
 
         from typer.testing import CliRunner
+
         from idn_area_etl.cli import app
 
         runner = CliRunner()
@@ -596,6 +599,7 @@ class TestNormalizeCommand:
         output_file = tmp_path / "output.csv"
 
         from typer.testing import CliRunner
+
         from idn_area_etl.cli import app
 
         runner = CliRunner()
@@ -632,6 +636,7 @@ class TestNormalizeCommand:
         input_file.write_text("code,name\n11,ACEH\n99,UNKNOWN PROVINCE\n")
 
         from typer.testing import CliRunner
+
         from idn_area_etl.cli import app
 
         runner = CliRunner()
@@ -655,6 +660,7 @@ class TestNormalizeCommand:
         report_file = tmp_path / "report.csv"
 
         from typer.testing import CliRunner
+
         from idn_area_etl.cli import app
 
         runner = CliRunner()
@@ -689,6 +695,7 @@ class TestNormalizeCommand:
         input_file.write_text("code,name\n11,ACEH\n")
 
         from typer.testing import CliRunner
+
         from idn_area_etl.cli import app
 
         runner = CliRunner()
@@ -709,6 +716,7 @@ class TestNormalizeCommand:
         input_file.write_text("code,name\n11,ACEH\n")
 
         from typer.testing import CliRunner
+
         from idn_area_etl.cli import app
 
         runner = CliRunner()

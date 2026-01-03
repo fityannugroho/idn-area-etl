@@ -1,30 +1,30 @@
 import os
 import signal
+import sys
 import time
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import FrameType
-import sys
 from typing import Annotated
 
 import camelot
+import typer
 from pypdf import PdfReader
 from tqdm import tqdm
-import typer
 
 from idn_area_etl.config import AppConfig, Area, ConfigError
 from idn_area_etl.extractors import AreaExtractor, IslandExtractor, TableExtractor
+from idn_area_etl.ground_truth import GroundTruthIndex
+from idn_area_etl.normalizer import normalize_csv
+from idn_area_etl.remote import RemoteError, get_default_ground_truth_path, show_version_info
 from idn_area_etl.utils import (
     chunked,
     format_duration,
     parse_page_range,
     validate_page_range,
 )
-from idn_area_etl.ground_truth import GroundTruthIndex
-from idn_area_etl.normalizer import normalize_csv
 from idn_area_etl.validator import validate_csv
-from idn_area_etl.remote import get_default_ground_truth_path, show_version_info, RemoteError
 
 app = typer.Typer()
 

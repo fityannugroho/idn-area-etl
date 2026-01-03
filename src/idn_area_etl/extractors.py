@@ -6,13 +6,13 @@ from typing import Callable
 
 import pandas as pd
 
-from idn_area_etl.config import Config, Area
+from idn_area_etl.config import Area, Config
 from idn_area_etl.utils import (
-    PROVINCE_CODE_LENGTH,
-    REGENCY_CODE_LENGTH,
     DISTRICT_CODE_LENGTH,
-    VILLAGE_CODE_LENGTH,
+    PROVINCE_CODE_LENGTH,
     RE_ISLAND_CODE,
+    REGENCY_CODE_LENGTH,
+    VILLAGE_CODE_LENGTH,
     clean_name,
     fix_wrapped_name,
     format_coordinate,

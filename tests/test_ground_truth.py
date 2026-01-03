@@ -13,7 +13,6 @@ from idn_area_etl.ground_truth import (
 )
 from idn_area_etl.utils import MatchCandidate, fuzzy_search_top_n
 
-
 # =============================================================================
 # Fixtures
 # =============================================================================

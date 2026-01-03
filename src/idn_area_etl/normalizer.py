@@ -14,7 +14,6 @@ from idn_area_etl.config import Area
 from idn_area_etl.ground_truth import AreaRecord, GroundTruthIndex
 from idn_area_etl.utils import MatchCandidate
 
-
 NormalizationStatus = Literal["valid", "corrected", "ambiguous", "not_found"]
 
 
