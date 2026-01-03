@@ -1,38 +1,5 @@
 # Testing
 
-## Commands
-
-### Run All Tests
-```bash
-uv run pytest
-```
-
-### Run with Coverage
-```bash
-uv run pytest --cov
-```
-
-### Run a Specific Test File
-```bash
-uv run pytest tests/test_extractors.py
-```
-
-### Run a Specific Test Function
-```bash
-uv run pytest tests/test_extractors.py::test_area_extractor_matches
-```
-
-### Run a Specific Test Class
-```bash
-uv run pytest tests/test_extractors.py::TestAreaExtractor
-```
-
-### Run Tests by Marker
-```bash
-# Run end-to-end tests
-uv run pytest -m e2e
-```
-
 ## Test Organization
 - `tests/`: Root test directory.
 - `tests/fixtures/`: Sample PDFs and expected CSV outputs.

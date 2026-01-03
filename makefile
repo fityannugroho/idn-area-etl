@@ -8,7 +8,7 @@ test-cov:
 	uv run pytest --cov
 
 lint:
-	uv run ruff check . && uv run pyright
+	uv run ruff check && uv run ruff format && uv run pyright
 
 build:
 	uv build
