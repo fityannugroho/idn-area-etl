@@ -16,6 +16,8 @@ from idn_area_etl.utils import (
     clean_name,
     fix_wrapped_name,
     format_coordinate,
+    is_fuzzy_contained,
+    is_fuzzy_match,
     normalize_words,
 )
 from idn_area_etl.writer import OutputWriter
@@ -115,11 +117,17 @@ class AreaExtractor(TableExtractor):
         if df.empty or df.shape[0] < 1:
             return False
         normalized_headers = [normalize_words(str(col)).lower() for col in df.iloc[0]]
-        return (
-            len(normalized_headers) >= 2
-            and normalized_headers[0] == "kode"
-            and "nama provinsi" in normalized_headers[1]
-        )
+
+        if len(normalized_headers) < 2:
+            return False
+
+        # Check for 'Kode' column
+        has_kode = is_fuzzy_match(normalized_headers[0], "kode")
+
+        # Check for 'Nama Provinsi' in second column
+        has_nama_provinsi = is_fuzzy_contained("nama provinsi", normalized_headers[1])
+
+        return has_kode and has_nama_provinsi
 
     def _code_name_pairs(self, df: pd.DataFrame) -> list[tuple[str, str]]:
         if df.empty or df.shape[1] < 2:
@@ -191,9 +199,19 @@ class IslandExtractor(TableExtractor):
 
     @staticmethod
     def _is_island_header(headers: list[str]) -> bool:
-        # same matching rule as before: explicit "kode pulau" OR single "kode" while "pulau" exists
+        # Fuzzy matching rule: explicit "kode pulau" OR single "kode" while "pulau" exists
         joined = " ".join(headers)
-        return any(("kode pulau" in h) or (h == "kode" and "pulau" in joined) for h in headers)
+
+        for h in headers:
+            # Check for "kode pulau" directly
+            if is_fuzzy_contained("kode pulau", h):
+                return True
+            # Check for "kode" and ensure "pulau" is somewhere in the headers
+            if is_fuzzy_match(h, "kode"):
+                if is_fuzzy_contained("pulau", joined):
+                    return True
+
+        return False
 
     def matches(self, df: pd.DataFrame) -> bool:
         # scan only a few top rows — tables in fixtures/banner starts here
@@ -222,16 +240,24 @@ class IslandExtractor(TableExtractor):
                     return idx
             return None
 
-        idx_code = find_first(lambda h: "kode" in h and "pulau" in h)
+        idx_code = find_first(
+            lambda h: is_fuzzy_contained("kode", h) and is_fuzzy_contained("pulau", h)
+        )
 
-        idx_name = find_first(lambda h: "nama" in h)
+        idx_name = find_first(lambda h: is_fuzzy_contained("nama", h))
 
-        idx_coord = find_first(lambda h: ("koordinat" in h) or ("kordinat" in h))
+        idx_coord = find_first(
+            lambda h: is_fuzzy_contained("koordinat", h) or is_fuzzy_contained("kordinat", h)
+        )
 
         idx_status = find_first(
-            lambda h: ("bp/tbp" in h) or (h in ("bp", "tbp", "status")) or ("keterangan" in h)
+            lambda h: (is_fuzzy_contained("bp/tbp", h))
+            or (is_fuzzy_match(h, "bp") or is_fuzzy_match(h, "tbp") or is_fuzzy_match(h, "status"))
+            or (is_fuzzy_contained("keterangan", h))
         )
-        idx_info = find_first(lambda h: ("keterangan" in h) or (h == "ket"))
+        idx_info = find_first(
+            lambda h: (is_fuzzy_contained("keterangan", h)) or (is_fuzzy_match(h, "ket"))
+        )
 
         return {
             "code": idx_code,

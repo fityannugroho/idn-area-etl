@@ -15,7 +15,62 @@ from idn_area_etl.utils import (
     validate_page_range,
     parse_page_range,
     format_duration,
+    is_fuzzy_match,
+    is_fuzzy_contained,
 )
+
+
+class TestFuzzyMatching:
+    """Test cases for fuzzy matching utilities."""
+
+    def test_is_fuzzy_match_exact(self):
+        assert is_fuzzy_match("Kode", "Kode")
+        assert is_fuzzy_match("kode", "KODE")
+
+    def test_is_fuzzy_match_close(self):
+        assert is_fuzzy_match("Kde", "Kode")  # Missing 'o' (85.7%)
+        assert is_fuzzy_match("Kod", "Kode")  # Missing 'e' (85.7%)
+        # "Code" vs "Kode" is 75%, so it fails at 80% default.
+        # But we can test it passes with lower threshold if needed.
+        assert is_fuzzy_match("Code", "Kode", threshold=70.0)
+
+    def test_is_fuzzy_match_different(self):
+        assert not is_fuzzy_match("Nama", "Kode")
+        assert not is_fuzzy_match("Provinsi", "Kabupaten")
+
+    def test_is_fuzzy_match_threshold(self):
+        # "Koe" vs "Kode" is ~85.7%
+        assert is_fuzzy_match("Koe", "Kode")
+
+        # "Ke" vs "Kode" -> 2 matches / (2+4) = 4/6 = 66%
+        assert not is_fuzzy_match("Ke", "Kode")
+        assert is_fuzzy_match("Ke", "Kode", threshold=60.0)
+
+    def test_is_fuzzy_contained_exact(self):
+        assert is_fuzzy_contained("Nama", "Nama Provinsi")
+        assert is_fuzzy_contained("provinsi", "NAMA PROVINSI")
+
+    def test_is_fuzzy_contained_typo(self):
+        assert is_fuzzy_contained("Prvinsi", "Nama Provinsi")  # Typo in needle
+        assert is_fuzzy_contained("Provinsi", "Nama Prvinsi")  # Typo in haystack
+
+    def test_is_fuzzy_contained_not_found(self):
+        assert not is_fuzzy_contained("Kabupaten", "Nama Provinsi")
+
+    def test_is_fuzzy_contained_directional(self):
+        # "kode pulau" is NOT contained in "kode"
+        assert not is_fuzzy_contained("kode pulau", "kode")
+        # "kode" IS contained in "kode pulau"
+        assert is_fuzzy_contained("kode", "kode pulau")
+
+    def test_is_fuzzy_contained_longer_needle_typo(self):
+        # "kode pulu" (typo, 9 chars) vs "kode pulau" (10 chars).
+        # Needle < Haystack. Partial ratio works.
+        assert is_fuzzy_contained("kode pulu", "kode pulau")
+
+        # "kode pulau" (10 chars) vs "kode pulu" (9 chars). Needle > Haystack. Fallback to ratio.
+        # Ratio("kode pulau", "kode pulu") -> 1 mismatch. High score.
+        assert is_fuzzy_contained("kode pulau", "kode pulu")
 
 
 class TestCleanName:

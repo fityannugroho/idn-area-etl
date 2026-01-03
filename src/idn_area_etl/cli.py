@@ -1,6 +1,7 @@
 import os
 import signal
 import time
+from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from types import FrameType
@@ -12,7 +13,7 @@ from pypdf import PdfReader
 from tqdm import tqdm
 import typer
 
-from idn_area_etl.config import AppConfig, ConfigError
+from idn_area_etl.config import AppConfig, Area, ConfigError
 from idn_area_etl.extractors import AreaExtractor, IslandExtractor, TableExtractor
 from idn_area_etl.utils import (
     chunked,
@@ -20,11 +21,29 @@ from idn_area_etl.utils import (
     parse_page_range,
     validate_page_range,
 )
+from idn_area_etl.ground_truth import GroundTruthIndex
+from idn_area_etl.normalizer import normalize_csv
+from idn_area_etl.validator import validate_csv
+from idn_area_etl.remote import get_default_ground_truth_path, show_version_info, RemoteError
 
 app = typer.Typer()
 
 MAIN_PID = os.getpid()
 interrupted = False
+
+
+class AreaChoice(str, Enum):
+    """Enum for CLI area type selection."""
+
+    province = "province"
+    regency = "regency"
+    district = "district"
+    village = "village"
+    island = "island"
+
+    def to_area(self) -> Area:
+        """Convert to Area Literal type."""
+        return self.value  # type: ignore[return-value]
 
 
 def handle_sigint(signum: int, frame: FrameType | None) -> None:
@@ -203,6 +222,297 @@ def extract(
     typer.echo(f"✅ Extraction completed in {format_duration(duration)}")
     typer.echo(f"🧾 Number of rows extracted: {extracted_count}")
     typer.echo(f"📁 Output files saved under: {destination.resolve()}")
+
+
+@app.command()
+def validate(
+    area: Annotated[
+        AreaChoice,
+        typer.Argument(help="Area type: province, regency, district, village, island"),
+    ],
+    input_file: Annotated[
+        Path,
+        typer.Argument(
+            exists=True, file_okay=True, dir_okay=False, help="Path to the CSV file to validate"
+        ),
+    ],
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            file_okay=True,
+            dir_okay=False,
+            help="Output path for the validation report CSV",
+        ),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Only show summary, suppress detailed errors"),
+    ] = False,
+) -> None:
+    """
+    Validate extracted CSV data and report errors.
+
+    Checks data integrity including code formats, parent code references,
+    required fields, and area-specific validations (e.g., coordinates for islands).
+    """
+    if input_file.suffix.lower() != ".csv":
+        typer.echo("Error: The input file must be a CSV.")
+        raise typer.Exit(code=1)
+
+    area_type = area.to_area()
+    typer.echo(f"Validating {input_file.name} as '{area_type}' data...")
+
+    # Process validation with progress
+    report = None
+    with tqdm(
+        desc="Validating rows",
+        unit=" rows",
+        colour="blue",
+        disable=not sys.stdout.isatty(),
+    ) as pbar:
+        for report in validate_csv(input_file, area_type):
+            pbar.total = report.total_rows
+            pbar.n = report.total_rows
+            pbar.refresh()
+
+    if report is None:
+        typer.echo("Error: Could not validate file.")
+        raise typer.Exit(code=1)
+
+    # Output results
+    typer.echo("")
+    typer.echo(report.summary())
+
+    if report.has_errors():
+        if output:
+            report.to_csv(output)
+            typer.echo(f"\nReport saved to: {output}")
+        elif not quiet:
+            typer.echo("\nErrors found:")
+            # Show first 20 errors to avoid flooding the terminal
+            max_display = 20
+            for err in report.errors[:max_display]:
+                typer.echo(
+                    f"  Row {err.row_number}, {err.column}: {err.error_type} - {err.message}"
+                )
+            if len(report.errors) > max_display:
+                typer.echo(f"  ... and {len(report.errors) - max_display} more errors")
+                typer.echo("  Use --output to save all errors to a CSV file.")
+
+        raise typer.Exit(code=1)
+
+    typer.echo("\nValidation passed. No errors found.")
+
+
+@app.command()
+def normalize(
+    area: Annotated[
+        AreaChoice,
+        typer.Argument(help="Area type: province, regency, district, village, island"),
+    ],
+    input_file: Annotated[
+        Path,
+        typer.Argument(
+            exists=True, file_okay=True, dir_okay=False, help="Path to the CSV file to normalize"
+        ),
+    ],
+    ground_truth_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--ground-truth",
+            "-g",
+            exists=True,
+            file_okay=False,
+            dir_okay=True,
+            help=(
+                "Directory containing ground truth CSV files. "
+                "If not provided, uses remote data from "
+                "github.com/fityannugroho/idn-area-data"
+            ),
+        ),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option(
+            "--output",
+            "-o",
+            file_okay=True,
+            dir_okay=False,
+            help="Output path for the corrected CSV file",
+        ),
+    ] = None,
+    report: Annotated[
+        Path | None,
+        typer.Option(
+            "--report",
+            "-r",
+            file_okay=True,
+            dir_okay=False,
+            help="Output path for the normalization report CSV",
+        ),
+    ] = None,
+    confidence: Annotated[
+        float,
+        typer.Option(
+            "--confidence",
+            "-c",
+            help="Minimum fuzzy match confidence score (0-100)",
+        ),
+    ] = 80.0,
+    quiet: Annotated[
+        bool,
+        typer.Option("--quiet", "-q", help="Only show summary, suppress detailed output"),
+    ] = False,
+    refresh_cache: Annotated[
+        bool,
+        typer.Option(
+            "--refresh-cache",
+            help="Force refresh of remote ground truth cache",
+        ),
+    ] = False,
+    version_info: Annotated[
+        bool,
+        typer.Option(
+            "--version-info",
+            help="Show cached ground truth version information and exit",
+        ),
+    ] = False,
+) -> None:
+    """
+    Normalize extracted CSV data against ground truth.
+
+    Uses fuzzy matching to find and suggest corrections for names that don't
+    exactly match ground truth data. Outputs corrected data and/or a report
+    of all changes made.
+    """
+    # Handle version info flag
+    if version_info:
+        show_version_info()
+        raise typer.Exit()
+
+    if input_file.suffix.lower() != ".csv":
+        typer.echo("Error: The input file must be a CSV.")
+        raise typer.Exit(code=1)
+
+    area_type = area.to_area()
+
+    # Handle ground truth directory
+    if ground_truth_dir is None:
+        typer.echo("Loading ground truth data from remote cache...")
+        try:
+            ground_truth_dir = get_default_ground_truth_path(refresh_cache=refresh_cache)
+            typer.echo(f"Using cached ground truth at: {ground_truth_dir}")
+        except RemoteError as e:
+            typer.echo(f"❌ Error loading remote ground truth: {e}")
+            typer.echo("💡 Use --ground-truth to specify a local directory")
+            raise typer.Exit(code=1)
+    else:
+        typer.echo(f"Loading ground truth data from {ground_truth_dir}...")
+
+    # At this point, ground_truth_dir is guaranteed to be a Path
+    assert ground_truth_dir is not None
+
+    # Load ground truth
+    gt = GroundTruthIndex()
+    try:
+        gt.load_from_directory(ground_truth_dir)
+    except ValueError as e:
+        typer.echo(f"Error loading ground truth: {e}")
+        raise typer.Exit(code=1)
+
+    if not quiet:
+        typer.echo(gt.summary())
+        typer.echo("")
+
+    typer.echo(f"Normalizing {input_file.name} as '{area_type}' data...")
+
+    # Run normalization
+    norm_report = normalize_csv(
+        input_file,
+        area_type,
+        gt,
+        confidence_threshold=confidence,
+    )
+
+    # Output results
+    typer.echo("")
+    typer.echo(norm_report.summary())
+
+    # Determine output headers based on area type
+    headers = _get_headers_for_area(area_type)
+
+    # Write corrected CSV if requested
+    if output:
+        norm_report.write_corrected_csv(output, headers)
+        typer.echo(f"\nCorrected CSV saved to: {output}")
+
+    # Write report if requested
+    if report:
+        norm_report.write_report_csv(report)
+        typer.echo(f"Normalization report saved to: {report}")
+
+    # Show sample changes if not quiet
+    if not quiet and norm_report.corrected_rows > 0:
+        typer.echo("\nSample corrections:")
+        shown = 0
+        max_show = 10
+        for row_norm in norm_report.normalizations:
+            if row_norm.status == "corrected" and shown < max_show:
+                for sug in row_norm.suggestions:
+                    typer.echo(
+                        f"  Row {row_norm.row_number}: '{sug.original}' -> "
+                        f"'{sug.suggested}' ({sug.confidence:.1f}%)"
+                    )
+                shown += 1
+        if norm_report.corrected_rows > max_show:
+            typer.echo(f"  ... and {norm_report.corrected_rows - max_show} more corrections")
+
+    # Show ambiguous rows if not quiet
+    if not quiet and norm_report.ambiguous_rows > 0:
+        typer.echo("\nAmbiguous rows (manual review needed):")
+        shown = 0
+        max_show = 5
+        for row_norm in norm_report.normalizations:
+            if row_norm.status == "ambiguous" and shown < max_show:
+                typer.echo(f"  Row {row_norm.row_number}: Multiple possible matches")
+                for sug in row_norm.suggestions[:3]:
+                    typer.echo(f"    - '{sug.suggested}' ({sug.confidence:.1f}%)")
+                shown += 1
+        if norm_report.ambiguous_rows > max_show:
+            typer.echo(f"  ... and {norm_report.ambiguous_rows - max_show} more ambiguous rows")
+
+    # Exit with error if there are unresolved issues
+    if norm_report.not_found_rows > 0 or norm_report.ambiguous_rows > 0:
+        typer.echo(
+            f"\nWarning: {norm_report.not_found_rows} rows not found, "
+            f"{norm_report.ambiguous_rows} rows ambiguous."
+        )
+        if not output:
+            typer.echo("Use --output to save corrected data.")
+        raise typer.Exit(code=1)
+
+    typer.echo("\nNormalization completed successfully.")
+
+
+def _get_headers_for_area(area: Area) -> list[str]:
+    """Get the expected CSV headers for an area type."""
+    headers: dict[Area, list[str]] = {
+        "province": ["code", "name"],
+        "regency": ["code", "province_code", "name"],
+        "district": ["code", "regency_code", "name"],
+        "village": ["code", "district_code", "name"],
+        "island": [
+            "code",
+            "regency_code",
+            "coordinate",
+            "is_populated",
+            "is_outermost_small",
+            "name",
+        ],
+    }
+    return headers.get(area, [])
 
 
 if __name__ == "__main__":

@@ -538,3 +538,190 @@ class TestVersionOptionCallback:
             version_option_callback(True)
         assert e.value.exit_code == 1
         assert "Version information not available" in capsys.readouterr().out
+
+
+class TestNormalizeCommand:
+    """Tests for the normalize command."""
+
+    def test_normalize_non_csv_file_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # Create a non-CSV file
+        txt_file = tmp_path / "data.txt"
+        txt_file.write_text("not a csv")
+
+        gt_dir = tmp_path / "gt"
+        gt_dir.mkdir()
+        (gt_dir / "province.csv").write_text("code,name\n11,ACEH\n")
+
+        from typer.testing import CliRunner
+        from idn_area_etl.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["normalize", "province", str(txt_file), "-g", str(gt_dir)])
+
+        assert result.exit_code == 1
+        assert "must be a CSV" in result.output
+
+    def test_normalize_province_exact_match(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # Create ground truth
+        gt_dir = tmp_path / "gt"
+        gt_dir.mkdir()
+        (gt_dir / "province.csv").write_text("code,name\n11,ACEH\n12,SUMATERA UTARA\n")
+
+        # Create input file with exact matches
+        input_file = tmp_path / "input.csv"
+        input_file.write_text("code,name\n11,ACEH\n12,SUMATERA UTARA\n")
+
+        from typer.testing import CliRunner
+        from idn_area_etl.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["normalize", "province", str(input_file), "-g", str(gt_dir)])
+
+        assert result.exit_code == 0
+        assert "Valid rows: 2" in result.output
+        assert "Normalization completed successfully" in result.output
+
+    def test_normalize_province_with_corrections(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Create ground truth
+        gt_dir = tmp_path / "gt"
+        gt_dir.mkdir()
+        (gt_dir / "province.csv").write_text("code,name\n11,ACEH\n12,SUMATERA UTARA\n")
+
+        # Create input file with typos
+        input_file = tmp_path / "input.csv"
+        input_file.write_text("code,name\n11,ACE\n12,SUMATRA UTARA\n")
+
+        output_file = tmp_path / "output.csv"
+
+        from typer.testing import CliRunner
+        from idn_area_etl.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "normalize",
+                "province",
+                str(input_file),
+                "-g",
+                str(gt_dir),
+                "-o",
+                str(output_file),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert "Corrected rows:" in result.output
+        assert output_file.exists()
+
+        # Verify corrected content
+        content = output_file.read_text()
+        assert "ACEH" in content
+        assert "SUMATERA UTARA" in content
+
+    def test_normalize_with_not_found_rows(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # Create ground truth with limited data
+        gt_dir = tmp_path / "gt"
+        gt_dir.mkdir()
+        (gt_dir / "province.csv").write_text("code,name\n11,ACEH\n")
+
+        # Create input file with unknown province
+        input_file = tmp_path / "input.csv"
+        input_file.write_text("code,name\n11,ACEH\n99,UNKNOWN PROVINCE\n")
+
+        from typer.testing import CliRunner
+        from idn_area_etl.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(app, ["normalize", "province", str(input_file), "-g", str(gt_dir)])
+
+        # Should exit with error due to not found rows
+        assert result.exit_code == 1
+        assert "Not found rows: 1" in result.output
+
+    def test_normalize_with_report_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # Create ground truth
+        gt_dir = tmp_path / "gt"
+        gt_dir.mkdir()
+        (gt_dir / "province.csv").write_text("code,name\n11,ACEH\n")
+
+        # Create input file with a typo
+        input_file = tmp_path / "input.csv"
+        input_file.write_text("code,name\n11,ACE\n")
+
+        output_file = tmp_path / "output.csv"
+        report_file = tmp_path / "report.csv"
+
+        from typer.testing import CliRunner
+        from idn_area_etl.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "normalize",
+                "province",
+                str(input_file),
+                "-g",
+                str(gt_dir),
+                "-o",
+                str(output_file),
+                "-r",
+                str(report_file),
+            ],
+        )
+
+        assert result.exit_code == 0
+        assert output_file.exists()
+        assert report_file.exists()
+        assert "report saved to" in result.output.lower()
+
+    def test_normalize_quiet_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        # Create ground truth
+        gt_dir = tmp_path / "gt"
+        gt_dir.mkdir()
+        (gt_dir / "province.csv").write_text("code,name\n11,ACEH\n")
+
+        # Create input file
+        input_file = tmp_path / "input.csv"
+        input_file.write_text("code,name\n11,ACEH\n")
+
+        from typer.testing import CliRunner
+        from idn_area_etl.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            ["normalize", "province", str(input_file), "-g", str(gt_dir), "-q"],
+        )
+
+        assert result.exit_code == 0
+        # In quiet mode, should not show ground truth summary details
+        assert "Sample corrections" not in result.output
+
+    def test_normalize_invalid_ground_truth_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        # Create input file
+        input_file = tmp_path / "input.csv"
+        input_file.write_text("code,name\n11,ACEH\n")
+
+        from typer.testing import CliRunner
+        from idn_area_etl.cli import app
+
+        runner = CliRunner()
+        result = runner.invoke(
+            app,
+            [
+                "normalize",
+                "province",
+                str(input_file),
+                "-g",
+                str(tmp_path / "nonexistent"),
+            ],
+        )
+
+        # Should fail because directory doesn't exist
+        assert result.exit_code != 0

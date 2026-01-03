@@ -1,5 +1,8 @@
 import re
+from dataclasses import dataclass
 from typing import Iterator
+
+from rapidfuzz import fuzz, process
 
 # =========================
 # Regex & constants (shared)
@@ -77,6 +80,90 @@ def normalize_words(words: str) -> str:
         if len(token) > 1 and token not in ("/", "-"):
             return s
     return "".join(tokens)
+
+
+def is_fuzzy_match(value: str, target: str, threshold: float = 80.0) -> bool:
+    """
+    Check if value matches target using fuzzy string matching (Ratio).
+    Useful for full string matching (e.g. "Kode" vs "Code").
+    """
+    if value == target:
+        return True
+    return fuzz.ratio(value.lower(), target.lower()) >= threshold
+
+
+def is_fuzzy_contained(needle: str, haystack: str, threshold: float = 80.0) -> bool:
+    """
+    Check if needle is contained in haystack using fuzzy string matching.
+    Useful for finding substrings (e.g. "Nama" in "Nama Provinsi").
+    """
+    n = needle.lower()
+    h = haystack.lower()
+
+    if n in h:
+        return True
+
+    # If needle is longer than haystack, it can't be "contained" in the traditional sense.
+    # We fall back to full ratio comparison to allow for slight length differences (e.g. typos)
+    # but prevent "kode pulau" matching "kode" just because "kode" is a substring of "kode pulau".
+    if len(n) > len(h):
+        return fuzz.ratio(n, h) >= threshold
+
+    return fuzz.partial_ratio(n, h) >= threshold
+
+
+@dataclass
+class MatchCandidate:
+    """Represents a fuzzy match candidate with its score."""
+
+    value: str
+    score: float
+    key: str | None = None  # Optional identifier (e.g., area code)
+
+
+def fuzzy_search_top_n(
+    query: str,
+    choices: list[str],
+    *,
+    n: int = 5,
+    threshold: float = 60.0,
+    keys: list[str] | None = None,
+) -> list[MatchCandidate]:
+    """
+    Search for top N fuzzy matches from a list of choices.
+
+    Uses rapidfuzz's process.extract for efficient batch matching.
+
+    Args:
+        query: The string to search for
+        choices: List of strings to search within
+        n: Maximum number of results to return (default: 5)
+        threshold: Minimum score threshold (0-100) to include in results
+        keys: Optional list of keys (e.g., codes) corresponding to each choice
+
+    Returns:
+        List of MatchCandidate objects sorted by score (highest first)
+    """
+    if not query or not choices:
+        return []
+
+    # Use rapidfuzz's process.extract for efficient matching
+    results = process.extract(
+        query.lower(),
+        [c.lower() for c in choices],
+        scorer=fuzz.ratio,
+        limit=n,
+        score_cutoff=threshold,
+    )
+
+    candidates: list[MatchCandidate] = []
+    for _, score, idx in results:
+        # Get original (non-lowercased) value
+        original_value = choices[idx]
+        key = keys[idx] if keys else None
+        candidates.append(MatchCandidate(value=original_value, score=score, key=key))
+
+    return candidates
 
 
 def chunked(iterable: list[int], size: int) -> Iterator[list[int]]:

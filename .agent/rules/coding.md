@@ -138,3 +138,13 @@ with (
 ### Signal Handling
 - CLI handles `SIGINT` for graceful shutdown.
 - Set `interrupted` flag and finish current chunk before exiting.
+
+### Remote Data Fetching
+- Use `httpx` for HTTP requests (not `urllib` or `requests`)
+- Always show progress bars for downloads using `tqdm`
+- Handle network errors gracefully with fallbacks to cached data
+- Implement proper error messages for network failures
+- Cache metadata in JSON format with ISO 8601 timestamps
+- Respect GitHub API rate limits and support `GITHUB_TOKEN` env var
+- Download timeout: 30 seconds default
+- Cache validity: 7 days default

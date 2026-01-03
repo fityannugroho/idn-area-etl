@@ -52,6 +52,7 @@ def test_cli_e2e_extract_matches_expected(tmp_path: Path) -> None:
         sys.executable,
         "-m",
         "idn_area_etl.cli",
+        "extract",
         str(pdf_path),
         "--destination",
         str(tmp_path),
