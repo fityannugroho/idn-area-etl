@@ -49,6 +49,7 @@ Defined in `pyproject.toml`:
 - Add new test cases for new extraction patterns.
 - Use `pytest-mock` for mocking dependencies.
 - Keep tests focused and isolated.
+- Test from the exposed public API. Do not test private methods/attributes directly.
 
 ## Coverage
 - Source coverage tracked in `src/`.

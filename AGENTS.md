@@ -90,14 +90,6 @@ filename_suffix = "province"
 4. Implement `_extract_rows(df)` to parse and return structured data.
 5. Register the extractor in `cli.py` by instantiating it with a context manager.
 
-### Code Length Constants
-Area codes are validated by length in `utils.py`:
-- Province: 2 digits (e.g., `"11"`)
-- Regency: 5 digits (e.g., `"11.01"` as `"1101"`)
-- District: 8 digits (e.g., `"11.01.02"` as `"11010200"`)
-- Village: 13 digits (e.g., `"11.01.02.2001"` as `"1101022001"`)
-- Island: Pattern `NN.NN.NNNNN` (e.g., `"11.01.40001"`)
-
 ### Extraction Flow
 1. CLI reads PDF in chunks using `camelot.read_pdf()`.
 2. For each table, iterate through registered extractors.

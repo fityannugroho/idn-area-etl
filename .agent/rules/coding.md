@@ -92,14 +92,14 @@ Return type: `dict[Area, list[list[str]]]` mapping area keys to rows.
 - Writers are managed via context managers in extractors.
 - Call `flush()` when buffer reaches `batch_size` threshold.
 
-### Code Length Constants
-| Area | Length | Example |
-|------|--------|---------|
-| Province | 2 digits | `"11"` |
-| Regency | 5 digits | `"1101"` (from `"11.01"`) |
-| District | 8 digits | `"11010200"` (from `"11.01.02"`) |
-| Village | 13 digits | `"1101022001"` (from `"11.01.02.2001"`) |
-| Island | Pattern `NN.NN.NNNNN` | `"11.01.40001"` |
+### Code Areas
+| Area | Pattern | Example |
+|------|---------|---------|
+| Province | `NN` | `"11"` |
+| Regency | `NN.NN` | `"11.01"` |
+| District | `NN.NN.NN` | `"11.01.02"` |
+| Village | `NN.NN.NN.NNNN` | `"11.01.02.2001"` |
+| Island | `NN.NN.NNNNN` | `"11.01.40001"` |
 
 ---
 
