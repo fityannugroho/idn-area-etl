@@ -15,5 +15,6 @@
     "**/dist/**"
   ],
   "reportUnknownMemberType": false,
-  "reportPrivateImportUsage": false
+  "reportPrivateImportUsage": false,
+  "reportMissingTypeStubs": false
 }
