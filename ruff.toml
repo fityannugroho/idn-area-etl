@@ -1,0 +1,33 @@
+# Maximum line length
+line-length = 100
+
+# Exclude common patterns
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+]
+
+# Auto fix
+fix = true
+
+[lint]
+# Enable Pyflakes (F), pycodestyle errors (E), and isort (I) by default
+select = ["E", "F", "I"]
+
+[format]
+# Use double quotes for strings
+quote-style = "double"
+
+# Indent with spaces
+indent-style = "space"
+
+# Like Black, respect magic trailing commas
+skip-magic-trailing-comma = false
+
+line-ending = "lf"
+
+[lint.isort]
+known-first-party = ["csvdiff"]
