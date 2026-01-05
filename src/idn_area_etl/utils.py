@@ -5,22 +5,41 @@ from typing import Iterator
 from rapidfuzz import fuzz, process
 
 # =========================
-# Regex & constants (shared)
+# Code format patterns and constants
+# =========================
+
+# Code length constants
+PROVINCE_CODE_LENGTH = 2
+REGENCY_CODE_LENGTH = 5
+DISTRICT_CODE_LENGTH = 8
+VILLAGE_CODE_LENGTH = 13
+
+# Code validation patterns
+# Province: "NN" (e.g., "11")
+RE_PROVINCE_CODE = re.compile(r"^\d{2}$")
+# Regency: "NN.NN" (e.g., "11.01")
+RE_REGENCY_CODE = re.compile(r"^\d{2}\.\d{2}$")
+# District: "NN.NN.NN" (e.g., "11.01.02")
+RE_DISTRICT_CODE = re.compile(r"^\d{2}\.\d{2}\.\d{2}$")
+# Village: "NN.NN.NN.NNNN" (e.g., "11.01.02.2001")
+RE_VILLAGE_CODE = re.compile(r"^\d{2}\.\d{2}\.\d{2}\.\d{4}$")
+# Island: "NN.NN.NNNNN" (e.g., "11.01.40001")
+RE_ISLAND_CODE = re.compile(r"^\d{2}\.\d{2}\.\d{5}$")
+# Coordinate format: "DD°MM'SS.SS" N/S DD°MM'SS.SS" E/W
+RE_COORDINATE = re.compile(
+    r"^\d{1,3}°\d{1,2}'\d{1,2}(?:\.\d+)?\"?\s+[NSEWUTB]+\s+"
+    r"\d{1,3}°\d{1,2}'\d{1,2}(?:\.\d+)?\"?\s+[NSEWUTB]+$",
+    re.IGNORECASE,
+)
+
+# =========================
+# Text cleaning patterns
 # =========================
 RE_BEGIN_DIGITS_NEWLINE = re.compile(r"^\d+\n")
 RE_END_DIGITS_NEWLINE = re.compile(r"\n\d+$")
 RE_MULTINEWLINE = re.compile(r"\n+")
 RE_BEGIN_DIGITS_SPACE = re.compile(r"^\d+\s+")
 RE_DOUBLE_SPACE = re.compile(r"\s{2,}")
-
-# Area code lengths
-PROVINCE_CODE_LENGTH = 2
-REGENCY_CODE_LENGTH = 5
-DISTRICT_CODE_LENGTH = 8
-VILLAGE_CODE_LENGTH = 13
-
-# Island code pattern sample: "11.01.40001"
-RE_ISLAND_CODE = re.compile(r"^\d{2}\.\d{2}\.\d{5}$")
 
 
 def _apply_regex_transformations(text: str) -> str:

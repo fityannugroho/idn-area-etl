@@ -6,11 +6,22 @@ validating and normalizing extracted data.
 """
 
 import csv
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Generic, Protocol, TypeVar
 
 from idn_area_etl.config import Area
 from idn_area_etl.utils import MatchCandidate, fuzzy_search_top_n
+
+
+class HasCodeAndName(Protocol):
+    """Protocol for records that have code and name attributes."""
+
+    code: str
+    name: str
+
+
+T = TypeVar("T", bound=HasCodeAndName)
 
 
 @dataclass
@@ -34,93 +45,66 @@ class IslandRecord:
     is_outermost_small: str = ""
 
 
-def _empty_area_record_list() -> list["AreaRecord"]:
-    return []
+class BaseIndex(Generic[T]):
+    """
+    Generic index for records with code and name lookups.
+
+    Provides efficient lookup by code and fuzzy search by name.
+    """
+
+    def __init__(self) -> None:
+        self.records: list[T] = []
+        self._code_to_record: dict[str, T] = {}
+        self._names: list[str] = []
+        self._codes: list[str] = []
+
+    def add(self, record: T) -> None:
+        """Add a record to the index."""
+        self.records.append(record)
+        self._code_to_record[record.code] = record
+        self._names.append(record.name)
+        self._codes.append(record.code)
+
+    def get_by_code(self, code: str) -> T | None:
+        """Lookup a record by its code."""
+        return self._code_to_record.get(code)
+
+    def search_by_name(
+        self, name: str, *, n: int = 5, threshold: float = 60.0
+    ) -> list[MatchCandidate]:
+        """Search for records by name using fuzzy matching."""
+        return fuzzy_search_top_n(name, self._names, n=n, threshold=threshold, keys=self._codes)
+
+    def has_code(self, code: str) -> bool:
+        """Check if a code exists in the index."""
+        return code in self._code_to_record
+
+    def __len__(self) -> int:
+        return len(self.records)
 
 
-def _empty_area_record_dict() -> dict[str, "AreaRecord"]:
-    return {}
-
-
-def _empty_str_list() -> list[str]:
-    return []
-
-
-@dataclass
-class AreaIndex:
+class AreaIndex(BaseIndex[AreaRecord]):
     """Index for a single area type with code and name lookups."""
 
-    area: Area
-    records: list["AreaRecord"] = field(default_factory=_empty_area_record_list)
-    _code_to_record: dict[str, "AreaRecord"] = field(default_factory=_empty_area_record_dict)
-    _names: list[str] = field(default_factory=_empty_str_list)
-    _codes: list[str] = field(default_factory=_empty_str_list)
-
-    def add(self, record: AreaRecord) -> None:
-        """Add a record to the index."""
-        self.records.append(record)
-        self._code_to_record[record.code] = record
-        self._names.append(record.name)
-        self._codes.append(record.code)
-
-    def get_by_code(self, code: str) -> AreaRecord | None:
-        """Lookup a record by its code."""
-        return self._code_to_record.get(code)
-
-    def search_by_name(
-        self, name: str, *, n: int = 5, threshold: float = 60.0
-    ) -> list[MatchCandidate]:
-        """Search for records by name using fuzzy matching."""
-        return fuzzy_search_top_n(name, self._names, n=n, threshold=threshold, keys=self._codes)
-
-    def has_code(self, code: str) -> bool:
-        """Check if a code exists in the index."""
-        return code in self._code_to_record
-
-    def __len__(self) -> int:
-        return len(self.records)
+    def __init__(self, area: Area = "province") -> None:
+        super().__init__()
+        self.area = area
 
 
-def _empty_island_record_list() -> list["IslandRecord"]:
-    return []
-
-
-def _empty_island_record_dict() -> dict[str, "IslandRecord"]:
-    return {}
-
-
-@dataclass
-class IslandIndex:
+class IslandIndex(BaseIndex[IslandRecord]):
     """Index for island data with code and name lookups."""
 
-    records: list["IslandRecord"] = field(default_factory=_empty_island_record_list)
-    _code_to_record: dict[str, "IslandRecord"] = field(default_factory=_empty_island_record_dict)
-    _names: list[str] = field(default_factory=_empty_str_list)
-    _codes: list[str] = field(default_factory=_empty_str_list)
+    pass
 
-    def add(self, record: IslandRecord) -> None:
-        """Add a record to the index."""
-        self.records.append(record)
-        self._code_to_record[record.code] = record
-        self._names.append(record.name)
-        self._codes.append(record.code)
 
-    def get_by_code(self, code: str) -> IslandRecord | None:
-        """Lookup a record by its code."""
-        return self._code_to_record.get(code)
-
-    def search_by_name(
-        self, name: str, *, n: int = 5, threshold: float = 60.0
-    ) -> list[MatchCandidate]:
-        """Search for records by name using fuzzy matching."""
-        return fuzzy_search_top_n(name, self._names, n=n, threshold=threshold, keys=self._codes)
-
-    def has_code(self, code: str) -> bool:
-        """Check if a code exists in the index."""
-        return code in self._code_to_record
-
-    def __len__(self) -> int:
-        return len(self.records)
+# Mapping constants for parent fields and hierarchy
+PARENT_FIELD_MAP: dict[Area, str] = {
+    "province": "",
+    "regency": "province_code",
+    "district": "regency_code",
+    "village": "district_code",
+    "island": "regency_code",
+}
 
 
 class GroundTruthIndex:
@@ -143,6 +127,14 @@ class GroundTruthIndex:
         self._districts_by_regency: dict[str, list[AreaRecord]] = {}
         self._villages_by_district: dict[str, list[AreaRecord]] = {}
         self._islands_by_regency: dict[str, list[IslandRecord]] = {}
+
+        # Strategy maps for cleaner lookups
+        self._area_indices: dict[Area, AreaIndex] = {
+            "province": self.provinces,
+            "regency": self.regencies,
+            "district": self.districts,
+            "village": self.villages,
+        }
 
     def load_from_directory(self, directory: Path) -> None:
         """
@@ -210,7 +202,7 @@ class GroundTruthIndex:
     def _load_area_csv(self, path: Path, area: Area) -> None:
         """Load area CSV into the appropriate index."""
         index = self._get_area_index(area)
-        parent_field = self._get_parent_field(area)
+        parent_field = PARENT_FIELD_MAP.get(area, "")
         hierarchy_map = self._get_hierarchy_map(area)
 
         with path.open("r", newline="", encoding="utf-8") as f:
@@ -252,27 +244,10 @@ class GroundTruthIndex:
 
     def _get_area_index(self, area: Area) -> AreaIndex:
         """Get the index for a specific area type."""
-        indices: dict[Area, AreaIndex] = {
-            "province": self.provinces,
-            "regency": self.regencies,
-            "district": self.districts,
-            "village": self.villages,
-        }
-        index = indices.get(area)
+        index = self._area_indices.get(area)
         if index is None:
             raise ValueError(f"No index for area type: {area}")
         return index
-
-    def _get_parent_field(self, area: Area) -> str:
-        """Get the parent code field name for an area type."""
-        fields: dict[Area, str] = {
-            "province": "",
-            "regency": "province_code",
-            "district": "regency_code",
-            "village": "district_code",
-            "island": "regency_code",
-        }
-        return fields.get(area, "")
 
     def _get_hierarchy_map(self, area: Area) -> dict[str, list[AreaRecord]] | None:
         """Get the hierarchy map for an area type."""
@@ -284,6 +259,23 @@ class GroundTruthIndex:
             "island": None,  # Islands use a separate map
         }
         return maps.get(area)
+
+    def _get_children_by_parent(
+        self, area: Area, parent_code: str
+    ) -> list[AreaRecord] | list[IslandRecord]:
+        """Get child records for a given parent code based on area type."""
+        hierarchy_getters: dict[
+            Area, dict[str, list[AreaRecord]] | dict[str, list[IslandRecord]]
+        ] = {
+            "regency": self._regencies_by_province,
+            "district": self._districts_by_regency,
+            "village": self._villages_by_district,
+            "island": self._islands_by_regency,
+        }
+        hierarchy = hierarchy_getters.get(area)
+        if hierarchy is None:
+            return []
+        return hierarchy.get(parent_code, [])
 
     # ===================
     # Public add methods (for programmatic population)
@@ -369,22 +361,9 @@ class GroundTruthIndex:
         Returns:
             List of MatchCandidate sorted by score
         """
+        # Try context-specific search first
         if parent_code:
-            # Get records under the parent
-            if area == "regency":
-                records = self.get_regencies_for_province(parent_code)
-            elif area == "district":
-                records = self.get_districts_for_regency(parent_code)
-            elif area == "village":
-                records = self.get_villages_for_district(parent_code)
-            elif area == "island":
-                islands = self.get_islands_for_regency(parent_code)
-                names = [r.name for r in islands]
-                codes = [r.code for r in islands]
-                return fuzzy_search_top_n(name, names, n=n, threshold=threshold, keys=codes)
-            else:
-                records = []
-
+            records = self._get_children_by_parent(area, parent_code)
             if records:
                 names = [r.name for r in records]
                 codes = [r.code for r in records]

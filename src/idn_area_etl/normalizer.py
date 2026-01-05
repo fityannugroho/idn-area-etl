@@ -8,10 +8,16 @@ for dirty or inconsistent data extracted from PDFs.
 import csv
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 from idn_area_etl.config import Area
-from idn_area_etl.ground_truth import AreaRecord, GroundTruthIndex
+from idn_area_etl.ground_truth import (
+    PARENT_FIELD_MAP,
+    AreaIndex,
+    AreaRecord,
+    GroundTruthIndex,
+    IslandRecord,
+)
 from idn_area_etl.utils import MatchCandidate
 
 NormalizationStatus = Literal["valid", "corrected", "ambiguous", "not_found"]
@@ -172,13 +178,38 @@ class Normalizer:
         self.confidence_threshold = confidence_threshold
         self.ambiguity_threshold = ambiguity_threshold
 
-    def normalize_province(self, row: dict[str, str], row_num: int) -> RowNormalization:
-        """Normalize a province row."""
+        # Map area types to their index and normalization method
+        self._area_indices: dict[Area, AreaIndex] = {
+            "province": ground_truth.provinces,
+            "regency": ground_truth.regencies,
+            "district": ground_truth.districts,
+            "village": ground_truth.villages,
+        }
+
+        # Dispatcher for normalize_row
+        self._normalizers: dict[Area, Callable[[dict[str, str], int], RowNormalization]] = {
+            "province": self._normalize_province,
+            "regency": self._normalize_area_with_parent,
+            "district": self._normalize_area_with_parent,
+            "village": self._normalize_area_with_parent,
+            "island": self._normalize_island,
+        }
+
+    def normalize_row(self, row: dict[str, str], row_num: int, area: Area) -> RowNormalization:
+        """Normalize a single row based on area type."""
+        if area in ("regency", "district", "village"):
+            return self._normalize_area_with_parent(row, row_num, area)
+        normalizer = self._normalizers.get(area)
+        if normalizer is None:
+            raise ValueError(f"Unknown area type: {area}")
+        return normalizer(row, row_num)
+
+    def _normalize_province(self, row: dict[str, str], row_num: int) -> RowNormalization:
+        """Normalize a province row (no parent code)."""
         code = row.get("code", "")
         name = row.get("name", "")
         corrected = dict(row)
 
-        # Check exact match by code
         record = self.ground_truth.provinces.get_by_code(code)
         if record:
             if record.name == name:
@@ -188,251 +219,191 @@ class Normalizer:
                     corrected=corrected,
                     status="valid",
                 )
+            # Name mismatch - suggest correction from ground truth
+            suggestion = NormalizationSuggestion(
+                original=name,
+                suggested=record.name,
+                confidence=100.0,
+                reason=f"Name corrected to match code {code} in ground truth",
+            )
+            corrected["name"] = record.name
+            return RowNormalization(
+                row_number=row_num,
+                original=row,
+                corrected=corrected,
+                status="corrected",
+                suggestions=[suggestion],
+            )
+
+        # Code not found - try fuzzy match on name
+        return self._normalize_by_name(row, row_num, name, "province", corrected, parent_code=None)
+
+    def _normalize_area_with_parent(
+        self, row: dict[str, str], row_num: int, area: Area | None = None
+    ) -> RowNormalization:
+        """
+        Normalize an area row that has a parent code field.
+
+        Works for regency, district, and village areas.
+        """
+        # Infer area from row structure if not provided
+        if area is None:
+            if "province_code" in row:
+                area = "regency"
+            elif "regency_code" in row:
+                area = "district"
+            elif "district_code" in row:
+                area = "village"
             else:
-                # Name mismatch - suggest correction from ground truth
-                suggestion = NormalizationSuggestion(
+                raise ValueError("Cannot infer area type from row")
+
+        parent_field = PARENT_FIELD_MAP.get(area, "")
+        index = self._area_indices.get(area)
+        if index is None:
+            raise ValueError(f"No index for area type: {area}")
+
+        code = row.get("code", "")
+        parent_code = row.get(parent_field, "") if parent_field else ""
+        name = row.get("name", "")
+        corrected = dict(row)
+
+        record = index.get_by_code(code)
+        if record:
+            return self._build_correction_from_record(
+                row, row_num, corrected, record, name, parent_code, parent_field, code
+            )
+
+        # Code not found - try fuzzy match on name within parent context
+        return self._normalize_by_name(row, row_num, name, area, corrected, parent_code=parent_code)
+
+    def _build_correction_from_record(
+        self,
+        row: dict[str, str],
+        row_num: int,
+        corrected: dict[str, str],
+        record: AreaRecord,
+        name: str,
+        parent_code: str,
+        parent_field: str,
+        code: str,
+    ) -> RowNormalization:
+        """Build correction suggestions from a matched record."""
+        suggestions: list[NormalizationSuggestion] = []
+
+        if record.name != name:
+            suggestions.append(
+                NormalizationSuggestion(
                     original=name,
                     suggested=record.name,
                     confidence=100.0,
                     reason=f"Name corrected to match code {code} in ground truth",
                 )
-                corrected["name"] = record.name
-                return RowNormalization(
-                    row_number=row_num,
-                    original=row,
-                    corrected=corrected,
-                    status="corrected",
-                    suggestions=[suggestion],
+            )
+            corrected["name"] = record.name
+
+        if parent_field and record.parent_code != parent_code:
+            suggestions.append(
+                NormalizationSuggestion(
+                    original=parent_code,
+                    suggested=record.parent_code,
+                    confidence=100.0,
+                    reason=f"Parent code corrected to match code {code} in ground truth",
                 )
+            )
+            corrected[parent_field] = record.parent_code
 
-        # Code not found - try fuzzy match on name
-        return self._normalize_by_name(row, row_num, name, "province", corrected, parent_code=None)
-
-    def normalize_regency(self, row: dict[str, str], row_num: int) -> RowNormalization:
-        """Normalize a regency row."""
-        code = row.get("code", "")
-        province_code = row.get("province_code", "")
-        name = row.get("name", "")
-        corrected = dict(row)
-
-        # Check exact match by code
-        record = self.ground_truth.regencies.get_by_code(code)
-        if record:
-            suggestions: list[NormalizationSuggestion] = []
-
-            if record.name != name:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=name,
-                        suggested=record.name,
-                        confidence=100.0,
-                        reason=f"Name corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["name"] = record.name
-
-            if record.parent_code != province_code:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=province_code,
-                        suggested=record.parent_code,
-                        confidence=100.0,
-                        reason=f"Province code corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["province_code"] = record.parent_code
-
-            if suggestions:
-                return RowNormalization(
-                    row_number=row_num,
-                    original=row,
-                    corrected=corrected,
-                    status="corrected",
-                    suggestions=suggestions,
-                )
+        if suggestions:
             return RowNormalization(
                 row_number=row_num,
                 original=row,
                 corrected=corrected,
-                status="valid",
+                status="corrected",
+                suggestions=suggestions,
             )
-
-        # Code not found - try fuzzy match on name within province context
-        return self._normalize_by_name(
-            row, row_num, name, "regency", corrected, parent_code=province_code
+        return RowNormalization(
+            row_number=row_num,
+            original=row,
+            corrected=corrected,
+            status="valid",
         )
 
-    def normalize_district(self, row: dict[str, str], row_num: int) -> RowNormalization:
-        """Normalize a district row."""
-        code = row.get("code", "")
-        regency_code = row.get("regency_code", "")
-        name = row.get("name", "")
-        corrected = dict(row)
-
-        # Check exact match by code
-        record = self.ground_truth.districts.get_by_code(code)
-        if record:
-            suggestions: list[NormalizationSuggestion] = []
-
-            if record.name != name:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=name,
-                        suggested=record.name,
-                        confidence=100.0,
-                        reason=f"Name corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["name"] = record.name
-
-            if record.parent_code != regency_code:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=regency_code,
-                        suggested=record.parent_code,
-                        confidence=100.0,
-                        reason=f"Regency code corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["regency_code"] = record.parent_code
-
-            if suggestions:
-                return RowNormalization(
-                    row_number=row_num,
-                    original=row,
-                    corrected=corrected,
-                    status="corrected",
-                    suggestions=suggestions,
-                )
-            return RowNormalization(
-                row_number=row_num,
-                original=row,
-                corrected=corrected,
-                status="valid",
-            )
-
-        # Code not found - try fuzzy match on name within regency context
-        return self._normalize_by_name(
-            row, row_num, name, "district", corrected, parent_code=regency_code
-        )
-
-    def normalize_village(self, row: dict[str, str], row_num: int) -> RowNormalization:
-        """Normalize a village row."""
-        code = row.get("code", "")
-        district_code = row.get("district_code", "")
-        name = row.get("name", "")
-        corrected = dict(row)
-
-        # Check exact match by code
-        record = self.ground_truth.villages.get_by_code(code)
-        if record:
-            suggestions: list[NormalizationSuggestion] = []
-
-            if record.name != name:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=name,
-                        suggested=record.name,
-                        confidence=100.0,
-                        reason=f"Name corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["name"] = record.name
-
-            if record.parent_code != district_code:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=district_code,
-                        suggested=record.parent_code,
-                        confidence=100.0,
-                        reason=f"District code corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["district_code"] = record.parent_code
-
-            if suggestions:
-                return RowNormalization(
-                    row_number=row_num,
-                    original=row,
-                    corrected=corrected,
-                    status="corrected",
-                    suggestions=suggestions,
-                )
-            return RowNormalization(
-                row_number=row_num,
-                original=row,
-                corrected=corrected,
-                status="valid",
-            )
-
-        # Code not found - try fuzzy match on name within district context
-        return self._normalize_by_name(
-            row, row_num, name, "village", corrected, parent_code=district_code
-        )
-
-    def normalize_island(self, row: dict[str, str], row_num: int) -> RowNormalization:
+    def _normalize_island(self, row: dict[str, str], row_num: int) -> RowNormalization:
         """Normalize an island row."""
         code = row.get("code", "")
         regency_code = row.get("regency_code", "")
         name = row.get("name", "")
         corrected = dict(row)
 
-        # Check exact match by code
         record = self.ground_truth.islands.get_by_code(code)
         if record:
-            suggestions: list[NormalizationSuggestion] = []
-
-            if record.name != name:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=name,
-                        suggested=record.name,
-                        confidence=100.0,
-                        reason=f"Name corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["name"] = record.name
-
-            if record.regency_code != regency_code:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=regency_code,
-                        suggested=record.regency_code,
-                        confidence=100.0,
-                        reason=f"Regency code corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["regency_code"] = record.regency_code
-
-            # Also normalize coordinate, is_populated, is_outermost_small from ground truth
-            if record.coordinate and row.get("coordinate", "") != record.coordinate:
-                suggestions.append(
-                    NormalizationSuggestion(
-                        original=row.get("coordinate", ""),
-                        suggested=record.coordinate,
-                        confidence=100.0,
-                        reason=f"Coordinate corrected to match code {code} in ground truth",
-                    )
-                )
-                corrected["coordinate"] = record.coordinate
-
-            if suggestions:
-                return RowNormalization(
-                    row_number=row_num,
-                    original=row,
-                    corrected=corrected,
-                    status="corrected",
-                    suggestions=suggestions,
-                )
-            return RowNormalization(
-                row_number=row_num,
-                original=row,
-                corrected=corrected,
-                status="valid",
+            return self._build_island_correction_from_record(
+                row, row_num, corrected, record, name, regency_code, code
             )
 
         # Code not found - try fuzzy match on name within regency context
         return self._normalize_island_by_name(row, row_num, name, corrected, regency_code)
+
+    def _build_island_correction_from_record(
+        self,
+        row: dict[str, str],
+        row_num: int,
+        corrected: dict[str, str],
+        record: IslandRecord,
+        name: str,
+        regency_code: str,
+        code: str,
+    ) -> RowNormalization:
+        """Build correction suggestions for an island from a matched record."""
+        suggestions: list[NormalizationSuggestion] = []
+
+        if record.name != name:
+            suggestions.append(
+                NormalizationSuggestion(
+                    original=name,
+                    suggested=record.name,
+                    confidence=100.0,
+                    reason=f"Name corrected to match code {code} in ground truth",
+                )
+            )
+            corrected["name"] = record.name
+
+        if record.regency_code != regency_code:
+            suggestions.append(
+                NormalizationSuggestion(
+                    original=regency_code,
+                    suggested=record.regency_code,
+                    confidence=100.0,
+                    reason=f"Regency code corrected to match code {code} in ground truth",
+                )
+            )
+            corrected["regency_code"] = record.regency_code
+
+        # Also normalize coordinate from ground truth if different
+        if record.coordinate and row.get("coordinate", "") != record.coordinate:
+            suggestions.append(
+                NormalizationSuggestion(
+                    original=row.get("coordinate", ""),
+                    suggested=record.coordinate,
+                    confidence=100.0,
+                    reason=f"Coordinate corrected to match code {code} in ground truth",
+                )
+            )
+            corrected["coordinate"] = record.coordinate
+
+        if suggestions:
+            return RowNormalization(
+                row_number=row_num,
+                original=row,
+                corrected=corrected,
+                status="corrected",
+                suggestions=suggestions,
+            )
+        return RowNormalization(
+            row_number=row_num,
+            original=row,
+            corrected=corrected,
+            status="valid",
+        )
 
     def _normalize_by_name(
         self,
@@ -483,29 +454,12 @@ class Normalizer:
                 status="not_found",
             )
 
-        top_match = matches[0]
-
         # Check for ambiguity
-        if len(matches) > 1:
-            score_gap = top_match.score - matches[1].score
-            if score_gap < self.ambiguity_threshold:
-                return RowNormalization(
-                    row_number=row_num,
-                    original=row,
-                    corrected=corrected,
-                    status="ambiguous",
-                    suggestions=[
-                        NormalizationSuggestion(
-                            original=name,
-                            suggested=m.value,
-                            confidence=m.score,
-                            reason=f"Fuzzy match candidate (code: {m.key})",
-                        )
-                        for m in matches
-                    ],
-                )
+        if ambiguous := self._check_ambiguity(row, row_num, name, corrected, matches):
+            return ambiguous
 
         # Use top match
+        top_match = matches[0]
         record = self.ground_truth.islands.get_by_code(top_match.key or "")
         if record:
             suggestions = [
@@ -542,20 +496,17 @@ class Normalizer:
             status="not_found",
         )
 
-    def _evaluate_matches(
+    def _check_ambiguity(
         self,
         row: dict[str, str],
         row_num: int,
         name: str,
         corrected: dict[str, str],
         matches: list[MatchCandidate],
-        area: Area,
-    ) -> RowNormalization:
-        """Evaluate fuzzy matches and return appropriate normalization result."""
-        top_match = matches[0]
-
-        # Check for ambiguity
+    ) -> RowNormalization | None:
+        """Check if matches are ambiguous and return ambiguous result if so."""
         if len(matches) > 1:
+            top_match = matches[0]
             score_gap = top_match.score - matches[1].score
             if score_gap < self.ambiguity_threshold:
                 return RowNormalization(
@@ -573,10 +524,27 @@ class Normalizer:
                         for m in matches
                     ],
                 )
+        return None
+
+    def _evaluate_matches(
+        self,
+        row: dict[str, str],
+        row_num: int,
+        name: str,
+        corrected: dict[str, str],
+        matches: list[MatchCandidate],
+        area: Area,
+    ) -> RowNormalization:
+        """Evaluate fuzzy matches and return appropriate normalization result."""
+        # Check for ambiguity
+        if ambiguous := self._check_ambiguity(row, row_num, name, corrected, matches):
+            return ambiguous
 
         # Use top match - get full record
+        top_match = matches[0]
         record = self._get_record_by_code(area, top_match.key or "")
         if record:
+            parent_field = PARENT_FIELD_MAP.get(area, "")
             suggestions = [
                 NormalizationSuggestion(
                     original=name,
@@ -587,10 +555,8 @@ class Normalizer:
             ]
             corrected["name"] = record.name
             corrected["code"] = record.code
-            if record.parent_code:
-                parent_field = self._get_parent_field(area)
-                if parent_field:
-                    corrected[parent_field] = record.parent_code
+            if record.parent_code and parent_field:
+                corrected[parent_field] = record.parent_code
 
             return RowNormalization(
                 row_number=row_num,
@@ -609,41 +575,29 @@ class Normalizer:
 
     def _get_record_by_code(self, area: Area, code: str) -> AreaRecord | None:
         """Get an area record by code."""
-        if area == "province":
-            return self.ground_truth.provinces.get_by_code(code)
-        elif area == "regency":
-            return self.ground_truth.regencies.get_by_code(code)
-        elif area == "district":
-            return self.ground_truth.districts.get_by_code(code)
-        elif area == "village":
-            return self.ground_truth.villages.get_by_code(code)
-        return None
+        index = self._area_indices.get(area)
+        return index.get_by_code(code) if index else None
 
-    def _get_parent_field(self, area: Area) -> str:
-        """Get the parent code field name for an area type."""
-        fields: dict[Area, str] = {
-            "province": "",
-            "regency": "province_code",
-            "district": "regency_code",
-            "village": "district_code",
-            "island": "regency_code",
-        }
-        return fields.get(area, "")
+    # Keep old method names as aliases for backwards compatibility
+    def normalize_province(self, row: dict[str, str], row_num: int) -> RowNormalization:
+        """Normalize a province row."""
+        return self._normalize_province(row, row_num)
 
-    def normalize_row(self, row: dict[str, str], row_num: int, area: Area) -> RowNormalization:
-        """Normalize a single row based on area type."""
-        if area == "province":
-            return self.normalize_province(row, row_num)
-        elif area == "regency":
-            return self.normalize_regency(row, row_num)
-        elif area == "district":
-            return self.normalize_district(row, row_num)
-        elif area == "village":
-            return self.normalize_village(row, row_num)
-        elif area == "island":
-            return self.normalize_island(row, row_num)
-        else:
-            raise ValueError(f"Unknown area type: {area}")
+    def normalize_regency(self, row: dict[str, str], row_num: int) -> RowNormalization:
+        """Normalize a regency row."""
+        return self._normalize_area_with_parent(row, row_num, "regency")
+
+    def normalize_district(self, row: dict[str, str], row_num: int) -> RowNormalization:
+        """Normalize a district row."""
+        return self._normalize_area_with_parent(row, row_num, "district")
+
+    def normalize_village(self, row: dict[str, str], row_num: int) -> RowNormalization:
+        """Normalize a village row."""
+        return self._normalize_area_with_parent(row, row_num, "village")
+
+    def normalize_island(self, row: dict[str, str], row_num: int) -> RowNormalization:
+        """Normalize an island row."""
+        return self._normalize_island(row, row_num)
 
 
 def normalize_csv(

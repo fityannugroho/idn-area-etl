@@ -16,24 +16,14 @@ from idn_area_etl.config import Area
 from idn_area_etl.utils import (
     DISTRICT_CODE_LENGTH,
     PROVINCE_CODE_LENGTH,
+    RE_COORDINATE,
+    RE_DISTRICT_CODE,
     RE_ISLAND_CODE,
+    RE_PROVINCE_CODE,
+    RE_REGENCY_CODE,
+    RE_VILLAGE_CODE,
     REGENCY_CODE_LENGTH,
 )
-
-# Coordinate pattern: DD°MM'SS.ss" N DDD°MM'SS.ss" E
-RE_COORDINATE = re.compile(
-    r"^\d{1,3}°\d{1,2}'\d{1,2}\.\d{2}\"\s*[NS]\s+\d{1,3}°\d{1,2}'\d{1,2}\.\d{2}\"\s*[EW]$"
-)
-
-# Area code patterns (with dots as extracted from PDF)
-# Province: NN (2 digits, pure numeric)
-RE_PROVINCE_CODE = re.compile(r"^\d{2}$")
-# Regency: NN.NN (e.g., "11.01")
-RE_REGENCY_CODE = re.compile(r"^\d{2}\.\d{2}$")
-# District: NN.NN.NN (e.g., "11.01.01")
-RE_DISTRICT_CODE = re.compile(r"^\d{2}\.\d{2}\.\d{2}$")
-# Village: NN.NN.NN.NNNN (e.g., "11.01.01.2001")
-RE_VILLAGE_CODE = re.compile(r"^\d{2}\.\d{2}\.\d{2}\.\d{4}$")
 
 
 @dataclass
@@ -193,6 +183,18 @@ class RowValidator(ABC):
             )
         return None
 
+    def _validate_boolean(self, value: str, row_num: int, column: str) -> ValidationError | None:
+        """Validate that a value is a boolean string ('0' or '1')."""
+        if value not in ("0", "1"):
+            return ValidationError(
+                row_number=row_num,
+                column=column,
+                value=value,
+                error_type="invalid_boolean",
+                message=f"{column} must be '0' or '1', got '{value}'",
+            )
+        return None
+
 
 class ProvinceValidator(RowValidator):
     """Validator for province data."""
@@ -248,22 +250,12 @@ class RegencyValidator(RowValidator):
                 province_code, RE_PROVINCE_CODE, "NN", row_num, "province_code"
             ):
                 errors.append(err)
-            # Validate parent code matches prefix (first 2 chars before dot)
-            if code and RE_REGENCY_CODE.match(code):
-                expected_prefix = code[:PROVINCE_CODE_LENGTH]
-                if province_code != expected_prefix:
-                    errors.append(
-                        ValidationError(
-                            row_number=row_num,
-                            column="province_code",
-                            value=province_code,
-                            error_type="invalid_parent_code",
-                            message=(
-                                f"Parent code '{province_code}' doesn't match "
-                                f"code prefix '{expected_prefix}'"
-                            ),
-                        )
-                    )
+            # Validate parent code matches prefix
+            elif code and RE_REGENCY_CODE.match(code):
+                if err := self._validate_parent_code_prefix(
+                    code, province_code, PROVINCE_CODE_LENGTH, row_num, "province_code"
+                ):
+                    errors.append(err)
 
         # Validate name
         if err := self._validate_not_empty(name, row_num, "name"):
@@ -299,22 +291,12 @@ class DistrictValidator(RowValidator):
                 regency_code, RE_REGENCY_CODE, "NN.NN", row_num, "regency_code"
             ):
                 errors.append(err)
-            # Validate parent code matches prefix (first 5 chars: "NN.NN")
-            if code and RE_DISTRICT_CODE.match(code):
-                expected_prefix = code[:REGENCY_CODE_LENGTH]
-                if regency_code != expected_prefix:
-                    errors.append(
-                        ValidationError(
-                            row_number=row_num,
-                            column="regency_code",
-                            value=regency_code,
-                            error_type="invalid_parent_code",
-                            message=(
-                                f"Parent code '{regency_code}' doesn't match "
-                                f"code prefix '{expected_prefix}'"
-                            ),
-                        )
-                    )
+            # Validate parent code matches prefix
+            elif code and RE_DISTRICT_CODE.match(code):
+                if err := self._validate_parent_code_prefix(
+                    code, regency_code, REGENCY_CODE_LENGTH, row_num, "regency_code"
+                ):
+                    errors.append(err)
 
         # Validate name
         if err := self._validate_not_empty(name, row_num, "name"):
@@ -350,22 +332,12 @@ class VillageValidator(RowValidator):
                 district_code, RE_DISTRICT_CODE, "NN.NN.NN", row_num, "district_code"
             ):
                 errors.append(err)
-            # Validate parent code matches prefix (first 8 chars: "NN.NN.NN")
-            if code and RE_VILLAGE_CODE.match(code):
-                expected_prefix = code[:DISTRICT_CODE_LENGTH]
-                if district_code != expected_prefix:
-                    errors.append(
-                        ValidationError(
-                            row_number=row_num,
-                            column="district_code",
-                            value=district_code,
-                            error_type="invalid_parent_code",
-                            message=(
-                                f"Parent code '{district_code}' doesn't match "
-                                f"code prefix '{expected_prefix}'"
-                            ),
-                        )
-                    )
+            # Validate parent code matches prefix
+            elif code and RE_VILLAGE_CODE.match(code):
+                if err := self._validate_parent_code_prefix(
+                    code, district_code, DISTRICT_CODE_LENGTH, row_num, "district_code"
+                ):
+                    errors.append(err)
 
         # Validate name
         if err := self._validate_not_empty(name, row_num, "name"):
@@ -436,28 +408,12 @@ class IslandValidator(RowValidator):
             )
 
         # Validate is_populated (must be 0 or 1)
-        if is_populated not in ("0", "1"):
-            errors.append(
-                ValidationError(
-                    row_number=row_num,
-                    column="is_populated",
-                    value=is_populated,
-                    error_type="invalid_boolean",
-                    message=f"is_populated must be '0' or '1', got '{is_populated}'",
-                )
-            )
+        if err := self._validate_boolean(is_populated, row_num, "is_populated"):
+            errors.append(err)
 
         # Validate is_outermost_small (must be 0 or 1)
-        if is_outermost_small not in ("0", "1"):
-            errors.append(
-                ValidationError(
-                    row_number=row_num,
-                    column="is_outermost_small",
-                    value=is_outermost_small,
-                    error_type="invalid_boolean",
-                    message=f"is_outermost_small must be '0' or '1', got '{is_outermost_small}'",
-                )
-            )
+        if err := self._validate_boolean(is_outermost_small, row_num, "is_outermost_small"):
+            errors.append(err)
 
         # Validate name
         if err := self._validate_not_empty(name, row_num, "name"):
