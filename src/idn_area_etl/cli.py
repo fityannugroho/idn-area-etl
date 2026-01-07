@@ -411,9 +411,6 @@ def normalize(
     else:
         typer.echo(f"Loading ground truth data from {ground_truth_dir}...")
 
-    # At this point, ground_truth_dir is guaranteed to be a Path
-    assert ground_truth_dir is not None
-
     # Load ground truth
     gt = GroundTruthIndex()
     try:
