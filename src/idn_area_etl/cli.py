@@ -19,6 +19,7 @@ from idn_area_etl.ground_truth import GroundTruthIndex
 from idn_area_etl.normalizer import normalize_csv
 from idn_area_etl.remote import RemoteError, get_default_ground_truth_path, show_version_info
 from idn_area_etl.utils import (
+    CamelotTempDir,
     chunked,
     format_duration,
     parse_page_range,
@@ -131,6 +132,16 @@ def extract(
             show_default=False,
         ),
     ] = Path.cwd(),
+    tmpdir: Annotated[
+        Path | None,
+        typer.Option(
+            "--tmpdir",
+            "-t",
+            dir_okay=True,
+            file_okay=False,
+            help="Custom directory for temporary files",
+        ),
+    ] = None,
     parallel: Annotated[
         bool,
         typer.Option("--parallel", help="Enable parallel processing for reading PDF tables"),
@@ -152,6 +163,11 @@ def extract(
     """
     _validate_inputs(pdf_path, page_range, output, destination)
     destination.mkdir(parents=True, exist_ok=True)
+
+    # Validate and prepare tmpdir if specified
+    if tmpdir:
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        typer.echo(f"📂 Using custom temp directory: {tmpdir.resolve()}")
 
     typer.echo("\n🏁 Program started")
     start_time = time.time()
@@ -189,27 +205,34 @@ def extract(
             for chunk in chunked(pages_to_extract, chunk_size):
                 if interrupted:
                     break
+
                 page_str = ",".join(map(str, chunk))
-                try:
-                    page_tables = camelot.read_pdf(
-                        str(pdf_path), pages=page_str, flavor="lattice", parallel=parallel
-                    )
-                except Exception as e:
-                    pbar.write(f"⚠️ Error reading pages {page_str}: {e}")
-                    pbar.update(len(chunk))
-                    continue
 
-                for table in page_tables:
-                    df = table.df
-                    for ex in extractors:
-                        try:
-                            if ex.matches(df):
-                                extracted_count += ex.extract_and_write(df)
-                                break  # stop at first matching extractor
-                        except Exception as ee:
-                            pbar.write(f"⚠️ Extractor error on pages {page_str}: {ee}")
-                            continue
+                # Use isolated temp directory for this chunk to prevent temp file accumulation
+                # Camelot's TemporaryDirectory.__exit__() is a no-op, causing temp files
+                # to accumulate until process exit. This wrapper ensures cleanup after each chunk.
+                with CamelotTempDir(base_dir=tmpdir):
+                    try:
+                        page_tables = camelot.read_pdf(
+                            str(pdf_path), pages=page_str, flavor="lattice", parallel=parallel
+                        )
+                    except Exception as e:
+                        pbar.write(f"⚠️ Error reading pages {page_str}: {e}")
+                        pbar.update(len(chunk))
+                        continue
 
+                    for table in page_tables:
+                        df = table.df
+                        for ex in extractors:
+                            try:
+                                if ex.matches(df):
+                                    extracted_count += ex.extract_and_write(df)
+                                    break  # stop at first matching extractor
+                            except Exception as ee:
+                                pbar.write(f"⚠️ Extractor error on pages {page_str}: {ee}")
+                                continue
+
+                # Temp directory is automatically cleaned up here
                 pbar.update(len(chunk))
 
     duration = time.time() - start_time

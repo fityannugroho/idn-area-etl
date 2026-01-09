@@ -1,8 +1,85 @@
 import re
+import shutil
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
+from types import TracebackType
 from typing import Iterator
 
 from rapidfuzz import fuzz, process
+
+# =========================
+# Temporary directory management for camelot
+# =========================
+
+
+class CamelotTempDir:
+    """
+    Context manager that creates an isolated temporary directory for camelot-py.
+
+    Camelot's TemporaryDirectory.__exit__() is a no-op, relying on atexit handlers
+    for cleanup. This causes temp files to accumulate when processing large PDFs
+    in chunks, eventually filling /tmp with "No space left on device" errors.
+
+    This context manager:
+    1. Creates an isolated temp directory
+    2. Temporarily sets tempfile.tempdir to force camelot to use it
+    3. Cleans up the directory on exit, regardless of exceptions
+    4. Restores the original tempfile.tempdir
+
+    Usage:
+        with CamelotTempDir() as temp_dir:
+            tables = camelot.read_pdf(...)
+            # Process tables
+        # temp_dir is automatically cleaned up here
+    """
+
+    def __init__(self, base_dir: Path | None = None, prefix: str = "camelot_") -> None:
+        """
+        Initialize the context manager.
+
+        Args:
+            base_dir: Optional base directory for temp files. Uses system default if None.
+            prefix: Prefix for the temp directory name (default: "camelot_")
+        """
+        self.base_dir = base_dir
+        self.prefix = prefix
+        self.temp_dir: str | None = None
+        self._original_tmpdir: str | None = None
+
+    def __enter__(self) -> str:
+        """Create temp directory and override tempfile.tempdir."""
+        # Create isolated temp directory
+        if self.base_dir:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_dir = tempfile.mkdtemp(prefix=self.prefix, dir=str(self.base_dir))
+        else:
+            self.temp_dir = tempfile.mkdtemp(prefix=self.prefix)
+
+        # Override tempfile.tempdir to force camelot to use our directory
+        self._original_tmpdir = tempfile.tempdir
+        tempfile.tempdir = self.temp_dir
+
+        return self.temp_dir
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Restore original tempdir and cleanup our temp directory."""
+        # Restore original tempdir
+        tempfile.tempdir = self._original_tmpdir
+
+        # Clean up temp directory
+        if self.temp_dir:
+            try:
+                shutil.rmtree(self.temp_dir)
+            except Exception:
+                # Silently ignore cleanup errors to avoid masking original exceptions
+                pass
+
 
 # =========================
 # Code format patterns and constants
