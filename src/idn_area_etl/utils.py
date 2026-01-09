@@ -1,8 +1,116 @@
+import atexit
 import re
+import shutil
+import tempfile
 from dataclasses import dataclass
-from typing import Iterator
+from pathlib import Path
+from types import TracebackType
+from typing import Any, Iterator
 
 from rapidfuzz import fuzz, process
+
+# =========================
+# Temporary directory management for camelot
+# =========================
+
+
+class CamelotTempDir:
+    """
+    Context manager that creates an isolated temporary directory for camelot-py.
+
+    Camelot's TemporaryDirectory.__exit__() is a no-op, relying on atexit handlers
+    for cleanup. This causes temp files to accumulate when processing large PDFs
+    in chunks, eventually filling /tmp with "No space left on device" errors.
+
+    This context manager:
+    1. Creates an isolated temp directory
+    2. Temporarily sets tempfile.tempdir to force camelot to use it
+    3. Intercepts atexit.register calls during camelot processing to track cleanup handlers
+    4. Cleans up the directory and unregisters tracked atexit handlers on exit
+    5. Restores the original tempfile.tempdir
+
+    Usage:
+        with CamelotTempDir() as temp_dir:
+            tables = camelot.read_pdf(...)
+            # Process tables
+        # temp_dir is automatically cleaned up here, atexit handlers unregistered
+    """
+
+    def __init__(self, base_dir: Path | None = None, prefix: str = "camelot_") -> None:
+        """
+        Initialize the context manager.
+
+        Args:
+            base_dir: Optional base directory for temp files. Uses system default if None.
+            prefix: Prefix for the temp directory name (default: "camelot_")
+        """
+        self.base_dir = base_dir
+        self.prefix = prefix
+        self.temp_dir: str | None = None
+        self._original_tmpdir: str | None = None
+        self._original_register: Any = None
+        self._tracked_funcs: list[Any] = []
+
+    def __enter__(self) -> str:
+        """Create temp directory and override tempfile.tempdir."""
+        # Create isolated temp directory
+        if self.base_dir:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+            self.temp_dir = tempfile.mkdtemp(prefix=self.prefix, dir=str(self.base_dir))
+        else:
+            self.temp_dir = tempfile.mkdtemp(prefix=self.prefix)
+
+        # Override tempfile.tempdir to force camelot to use our directory
+        self._original_tmpdir = tempfile.tempdir
+        tempfile.tempdir = self.temp_dir
+
+        # Store original atexit.register
+        self._original_register = atexit.register
+
+        # Create tracking wrapper for atexit.register
+        def tracking_register(func: Any, *args: Any, **kwargs: Any) -> Any:
+            # Track cleanup functions for our temp directory
+            if (
+                func == shutil.rmtree
+                and args
+                and self.temp_dir
+                and str(args[0]).startswith(str(self.temp_dir))
+            ):
+                self._tracked_funcs.append(func)
+
+            # Call original register (pass through all args)
+            return self._original_register(func, *args, **kwargs)  # noqa: B026
+
+        # Replace atexit.register temporarily
+        atexit.register = tracking_register
+
+        return self.temp_dir
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        """Restore everything and cleanup."""
+        # Restore original atexit.register
+        if self._original_register is not None:
+            atexit.register = self._original_register
+
+        # Restore original tempdir
+        tempfile.tempdir = self._original_tmpdir
+
+        # Unregister all tracked cleanup functions
+        for func in self._tracked_funcs:
+            try:
+                atexit.unregister(func)
+            except Exception:
+                pass  # Ignore if already unregistered or other errors
+
+        # Clean up temp directory
+        if self.temp_dir:
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
+
 
 # =========================
 # Code format patterns and constants

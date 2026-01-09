@@ -397,6 +397,130 @@ class TestExtractFunction:
 
         assert exc_info.value.exit_code == 1
 
+    def test_extract_with_custom_tmpdir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Test that --tmpdir option creates temp directories in custom location."""
+
+        class _StubReader:
+            def __init__(self, *_: Any, **__: Any) -> None:
+                self.pages = [object()]  # 1 page
+
+        def _stub_read_pdf(_path: str, pages: str, flavor: str, parallel: bool):
+            return [_StubTable(_df_area_min())]
+
+        from idn_area_etl import cli as cli_mod
+
+        monkeypatch.setattr(cli_mod, "PdfReader", _StubReader)
+        monkeypatch.setattr(cli_mod.camelot, "read_pdf", _stub_read_pdf)
+
+        pdf_file = tmp_path / "input.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4\n%fake")
+        dest = tmp_path / "out"
+        custom_tmpdir = tmp_path / "custom_temp"
+
+        extract(
+            pdf_path=pdf_file,
+            chunk_size=1,
+            config_path=None,
+            page_range=None,
+            output="result",
+            destination=dest,
+            tmpdir=custom_tmpdir,
+            parallel=False,
+            version=None,
+        )
+
+        # Verify extraction succeeded
+        assert (dest / "result.province.csv").exists()
+
+        # Verify custom tmpdir was created
+        assert custom_tmpdir.exists()
+        assert custom_tmpdir.is_dir()
+
+        # Verify temp files were cleaned up (no leftover camelot_ directories)
+        temp_dirs = list(custom_tmpdir.glob("camelot_*"))
+        assert len(temp_dirs) == 0, "Temporary directories should be cleaned up after extraction"
+
+    def test_extract_with_tmpdir_creates_directory_if_not_exists(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Test that --tmpdir creates the directory if it doesn't exist."""
+
+        class _StubReader:
+            def __init__(self, *_: Any, **__: Any) -> None:
+                self.pages = [object()]
+
+        def _stub_read_pdf(_path: str, pages: str, flavor: str, parallel: bool):
+            return [_StubTable(_df_area_min())]
+
+        from idn_area_etl import cli as cli_mod
+
+        monkeypatch.setattr(cli_mod, "PdfReader", _StubReader)
+        monkeypatch.setattr(cli_mod.camelot, "read_pdf", _stub_read_pdf)
+
+        pdf_file = tmp_path / "input.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4\n%fake")
+        dest = tmp_path / "out"
+        custom_tmpdir = tmp_path / "nested" / "custom" / "temp"
+
+        # Verify tmpdir doesn't exist yet
+        assert not custom_tmpdir.exists()
+
+        extract(
+            pdf_path=pdf_file,
+            chunk_size=1,
+            config_path=None,
+            page_range=None,
+            output="result",
+            destination=dest,
+            tmpdir=custom_tmpdir,
+            parallel=False,
+            version=None,
+        )
+
+        # Verify extraction succeeded
+        assert (dest / "result.province.csv").exists()
+
+        # Verify tmpdir was created
+        assert custom_tmpdir.exists()
+        assert custom_tmpdir.is_dir()
+
+    def test_extract_without_tmpdir_uses_system_default(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Test that extraction works without --tmpdir (uses system default)."""
+
+        class _StubReader:
+            def __init__(self, *_: Any, **__: Any) -> None:
+                self.pages = [object()]
+
+        def _stub_read_pdf(_path: str, pages: str, flavor: str, parallel: bool):
+            return [_StubTable(_df_area_min())]
+
+        from idn_area_etl import cli as cli_mod
+
+        monkeypatch.setattr(cli_mod, "PdfReader", _StubReader)
+        monkeypatch.setattr(cli_mod.camelot, "read_pdf", _stub_read_pdf)
+
+        pdf_file = tmp_path / "input.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4\n%fake")
+        dest = tmp_path / "out"
+
+        extract(
+            pdf_path=pdf_file,
+            chunk_size=1,
+            config_path=None,
+            page_range=None,
+            output="result",
+            destination=dest,
+            tmpdir=None,  # Use system default
+            parallel=False,
+            version=None,
+        )
+
+        # Verify extraction succeeded
+        assert (dest / "result.province.csv").exists()
+        assert "Aceh" in (dest / "result.province.csv").read_text(encoding="utf-8")
+
 
 class TestSignalHandler:
     """Tests for the signal handler function."""
