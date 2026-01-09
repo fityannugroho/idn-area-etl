@@ -1,10 +1,11 @@
+import atexit
 import re
 import shutil
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
-from typing import Iterator
+from typing import Any, Iterator
 
 from rapidfuzz import fuzz, process
 
@@ -24,14 +25,15 @@ class CamelotTempDir:
     This context manager:
     1. Creates an isolated temp directory
     2. Temporarily sets tempfile.tempdir to force camelot to use it
-    3. Cleans up the directory on exit, regardless of exceptions
-    4. Restores the original tempfile.tempdir
+    3. Intercepts atexit.register calls during camelot processing to track cleanup handlers
+    4. Cleans up the directory and unregisters tracked atexit handlers on exit
+    5. Restores the original tempfile.tempdir
 
     Usage:
         with CamelotTempDir() as temp_dir:
             tables = camelot.read_pdf(...)
             # Process tables
-        # temp_dir is automatically cleaned up here
+        # temp_dir is automatically cleaned up here, atexit handlers unregistered
     """
 
     def __init__(self, base_dir: Path | None = None, prefix: str = "camelot_") -> None:
@@ -46,6 +48,8 @@ class CamelotTempDir:
         self.prefix = prefix
         self.temp_dir: str | None = None
         self._original_tmpdir: str | None = None
+        self._original_register: Any = None
+        self._tracked_funcs: list[Any] = []
 
     def __enter__(self) -> str:
         """Create temp directory and override tempfile.tempdir."""
@@ -60,6 +64,26 @@ class CamelotTempDir:
         self._original_tmpdir = tempfile.tempdir
         tempfile.tempdir = self.temp_dir
 
+        # Store original atexit.register
+        self._original_register = atexit.register
+
+        # Create tracking wrapper for atexit.register
+        def tracking_register(func: Any, *args: Any, **kwargs: Any) -> Any:
+            # Track cleanup functions for our temp directory
+            if (
+                func == shutil.rmtree
+                and args
+                and self.temp_dir
+                and str(args[0]).startswith(str(self.temp_dir))
+            ):
+                self._tracked_funcs.append(func)
+
+            # Call original register (pass through all args)
+            return self._original_register(func, *args, **kwargs)  # noqa: B026
+
+        # Replace atexit.register temporarily
+        atexit.register = tracking_register
+
         return self.temp_dir
 
     def __exit__(
@@ -68,17 +92,24 @@ class CamelotTempDir:
         exc_value: BaseException | None,
         traceback: TracebackType | None,
     ) -> None:
-        """Restore original tempdir and cleanup our temp directory."""
+        """Restore everything and cleanup."""
+        # Restore original atexit.register
+        if self._original_register is not None:
+            atexit.register = self._original_register
+
         # Restore original tempdir
         tempfile.tempdir = self._original_tmpdir
 
+        # Unregister all tracked cleanup functions
+        for func in self._tracked_funcs:
+            try:
+                atexit.unregister(func)
+            except Exception:
+                pass  # Ignore if already unregistered or other errors
+
         # Clean up temp directory
         if self.temp_dir:
-            try:
-                shutil.rmtree(self.temp_dir)
-            except Exception:
-                # Silently ignore cleanup errors to avoid masking original exceptions
-                pass
+            shutil.rmtree(self.temp_dir, ignore_errors=True)
 
 
 # =========================
