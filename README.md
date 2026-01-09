@@ -31,6 +31,7 @@ Usage: idnareaetl extract [OPTIONS] PDF_PATH
 │ --output       -o      TEXT       Name of the output CSV file (without       │
 │                                   extension)                                 │
 │ --destination  -d      DIRECTORY  Destination folder for the output files    │
+│ --tmpdir       -t      DIRECTORY  Custom directory for temporary files       │
 │ --parallel                        Enable parallel processing for reading PDF │
 │                                   tables                                     │
 │ --version      -v                 Show the version of this package           │
