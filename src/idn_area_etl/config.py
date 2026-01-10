@@ -21,23 +21,6 @@ class ExtractorConfig:
     exclude_keywords: tuple[str, ...] = ()
 
 
-# Default extractor configurations
-DEFAULT_AREA_CONFIG = ExtractorConfig(
-    code_keywords=("kode",),
-    name_keywords=("nama", "provinsi", "kabupaten", "kota", "kecamatan", "desa", "kelurahan"),
-    exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
-)
-
-DEFAULT_ISLAND_CONFIG = ExtractorConfig(
-    code_keywords=("kode", "pulau"),
-    name_keywords=("nama", "pulau"),
-    coordinate_keywords=("koordinat", "kordinat"),
-    status_keywords=("bp/tbp", "bp", "tbp", "status", "keterangan"),
-    info_keywords=("keterangan", "ket"),
-    exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
-)
-
-
 @dataclass
 class DataConfig:
     batch_size: int
@@ -107,15 +90,60 @@ class AppConfig:
     """Application configuration manager."""
 
     @classmethod
+    def _get_bundled_config_path(cls) -> Path:
+        """Get path to bundled default config file."""
+        # Running from source directory - config is next to this module
+        source_dir = Path(__file__).parent
+        bundled = source_dir / DEFAULT_CONFIG_FILENAME
+        if bundled.is_file():
+            return bundled
+
+        raise ConfigError(f"Bundled config '{DEFAULT_CONFIG_FILENAME}' not found in package")
+
+    @classmethod
+    def _check_cwd_config_exists(cls) -> bool:
+        """Check if config exists in cwd (for migration warning)."""
+        return (Path.cwd() / DEFAULT_CONFIG_FILENAME).is_file()
+
+    @classmethod
     def load(
         cls,
-        source_path: Path = Path.cwd() / DEFAULT_CONFIG_FILENAME,
+        config_path: Path | str | None = None,
         *,
         loader: FileLoader = TomlLoader(),
     ) -> Config:
-        """Load configuration. If source_path is None, load from the default location."""
-        if not source_path.is_file():
-            raise ConfigError(f"Configuration file not found: {source_path}")
+        """Load configuration.
+
+        Args:
+            config_path: Path to config file or directory, or None to use bundled default
+            loader: File loader strategy
+
+        Returns:
+            Parsed Config object
+
+        Raises:
+            ConfigError: If config file not found or invalid
+        """
+        # If config_path is None, load from bundled default
+        if config_path is None:
+            source_path = cls._get_bundled_config_path()
+        else:
+            # Convert to Path if string
+            if isinstance(config_path, str):
+                config_path = Path(config_path)
+
+            # Handle directory vs file
+            if config_path.is_dir():
+                source_path = config_path / DEFAULT_CONFIG_FILENAME
+                if not source_path.is_file():
+                    raise ConfigError(
+                        f"Config file '{DEFAULT_CONFIG_FILENAME}' not found "
+                        f"in directory: {config_path}"
+                    )
+            elif config_path.is_file():
+                source_path = config_path
+            else:
+                raise ConfigError(f"Configuration path does not exist: {config_path}")
 
         try:
             raw = loader.load(source_path)
@@ -186,23 +214,19 @@ class AppConfig:
         # Parse area and island extractor configs
         extractors: dict[str, ExtractorConfig] = {}
 
-        # Parse area extractor config
-        area_config_raw = extractors_raw.get("area", {})
-        if isinstance(area_config_raw, dict):
-            extractors["area"] = cls._parse_extractor_config(
-                cast(dict[str, Any], area_config_raw), DEFAULT_AREA_CONFIG
-            )
-        else:
-            extractors["area"] = DEFAULT_AREA_CONFIG
+        # Parse area extractor config - REQUIRE it to exist
+        area_config_raw = extractors_raw.get("area")
+        if not isinstance(area_config_raw, dict) or not area_config_raw:
+            raise ConfigError("Missing required section [extractors.area] in configuration")
 
-        # Parse island extractor config
-        island_config_raw = extractors_raw.get("island", {})
-        if isinstance(island_config_raw, dict):
-            extractors["island"] = cls._parse_extractor_config(
-                cast(dict[str, Any], island_config_raw), DEFAULT_ISLAND_CONFIG
-            )
-        else:
-            extractors["island"] = DEFAULT_ISLAND_CONFIG
+        extractors["area"] = cls._parse_extractor_config(cast(dict[str, Any], area_config_raw))
+
+        # Parse island extractor config - REQUIRE it to exist
+        island_config_raw = extractors_raw.get("island")
+        if not isinstance(island_config_raw, dict) or not island_config_raw:
+            raise ConfigError("Missing required section [extractors.island] in configuration")
+
+        extractors["island"] = cls._parse_extractor_config(cast(dict[str, Any], island_config_raw))
 
         return Config(
             data=valid_data_config,
@@ -212,26 +236,22 @@ class AppConfig:
         )
 
     @classmethod
-    def _parse_extractor_config(
-        cls, raw: dict[str, Any], default: ExtractorConfig
-    ) -> ExtractorConfig:
-        """Parse extractor configuration with defaults."""
+    def _parse_extractor_config(cls, raw: dict[str, Any]) -> ExtractorConfig:
+        """Parse extractor configuration."""
 
-        def to_tuple(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
+        def to_tuple(value: Any) -> tuple[str, ...]:
             if isinstance(value, str):
                 return tuple(s.strip().lower() for s in value.split(",") if s.strip())
             elif isinstance(value, (list, tuple)):
                 items = cast(Iterable[object], value)
                 return tuple(str(s).strip().lower() for s in items if str(s).strip())
-            return default
+            return ()
 
         return ExtractorConfig(
-            code_keywords=to_tuple(raw.get("code_keywords"), default.code_keywords),
-            name_keywords=to_tuple(raw.get("name_keywords"), default.name_keywords),
-            coordinate_keywords=to_tuple(
-                raw.get("coordinate_keywords"), default.coordinate_keywords
-            ),
-            status_keywords=to_tuple(raw.get("status_keywords"), default.status_keywords),
-            info_keywords=to_tuple(raw.get("info_keywords"), default.info_keywords),
-            exclude_keywords=to_tuple(raw.get("exclude_keywords"), default.exclude_keywords),
+            code_keywords=to_tuple(raw.get("code_keywords")),
+            name_keywords=to_tuple(raw.get("name_keywords")),
+            coordinate_keywords=to_tuple(raw.get("coordinate_keywords")),
+            status_keywords=to_tuple(raw.get("status_keywords")),
+            info_keywords=to_tuple(raw.get("info_keywords")),
+            exclude_keywords=to_tuple(raw.get("exclude_keywords")),
         )

@@ -4,12 +4,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from idn_area_etl.config import (
-    DEFAULT_AREA_CONFIG,
-    DEFAULT_ISLAND_CONFIG,
-    Config,
-    DataConfig,
-)
+from idn_area_etl.config import Config, DataConfig, ExtractorConfig
 from idn_area_etl.extractors import AreaExtractor, IslandExtractor
 from idn_area_etl.utils import (
     DISTRICT_CODE_LENGTH,
@@ -62,8 +57,27 @@ def config() -> Config:
             ),
         },
         extractors={
-            "area": DEFAULT_AREA_CONFIG,
-            "island": DEFAULT_ISLAND_CONFIG,
+            "area": ExtractorConfig(
+                code_keywords=("kode",),
+                name_keywords=(
+                    "nama",
+                    "provinsi",
+                    "kabupaten",
+                    "kota",
+                    "kecamatan",
+                    "desa",
+                    "kelurahan",
+                ),
+                exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
+            ),
+            "island": ExtractorConfig(
+                code_keywords=("kode", "pulau"),
+                name_keywords=("nama", "pulau"),
+                coordinate_keywords=("koordinat", "kordinat"),
+                status_keywords=("bp/tbp", "bp", "tbp", "status", "keterangan"),
+                info_keywords=("keterangan", "ket"),
+                exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
+            ),
         },
         fuzzy_threshold=80.0,
         exclude_threshold=65.0,

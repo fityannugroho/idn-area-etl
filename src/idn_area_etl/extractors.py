@@ -6,7 +6,7 @@ from typing import Callable, Self
 
 import pandas as pd
 
-from idn_area_etl.config import DEFAULT_AREA_CONFIG, DEFAULT_ISLAND_CONFIG, Area, Config
+from idn_area_etl.config import Area, Config
 from idn_area_etl.utils import (
     DISTRICT_CODE_LENGTH,
     PROVINCE_CODE_LENGTH,
@@ -113,8 +113,8 @@ class AreaExtractor(TableExtractor):
         super().__init__(destination, output_name, config=config)
         self._seen_provinces: set[str] = set()
 
-        # Get extractor config with defaults
-        self._extractor_config = config.extractors.get("area", DEFAULT_AREA_CONFIG)
+        # Get extractor config - required to exist
+        self._extractor_config = config.extractors["area"]
         self._fuzzy_threshold = config.fuzzy_threshold
         self._exclude_threshold = config.exclude_threshold
 
@@ -248,8 +248,8 @@ class IslandExtractor(TableExtractor):
     def __init__(self, destination: Path, output_name: str, config: Config) -> None:
         super().__init__(destination, output_name, config=config)
 
-        # Get extractor config with defaults
-        self._extractor_config = config.extractors.get("island", DEFAULT_ISLAND_CONFIG)
+        # Get extractor config - required to exist
+        self._extractor_config = config.extractors["island"]
         self._fuzzy_threshold = config.fuzzy_threshold
         self._exclude_threshold = config.exclude_threshold
 

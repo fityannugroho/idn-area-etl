@@ -33,8 +33,8 @@ A Python CLI tool for extracting Indonesian area codes (Province, Regency, Distr
   - `cli.py` - Typer CLI with extract, validate, normalize commands
   - `config.py` - TOML configuration loading
   - `utils.py` - Regex, normalization, fuzzy search utilities
+  - `idnareaetl.toml` - Default runtime configuration
 - `tests/` - Test suite
   - `fixtures/` - Sample PDFs and expected CSV outputs
-- `idnareaetl.toml` - App configuration
 - `pyproject.toml` - Project dependencies and metadata
 - `pyrightconfig.json` - Type checking configuration

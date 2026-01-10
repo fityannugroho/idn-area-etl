@@ -34,6 +34,9 @@ idnareaetl = "idn_area_etl.cli:app"
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.package-data]
+idn_area_etl = ["idnareaetl.toml"]
+
 [tool.uv]
 package = true
 

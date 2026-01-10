@@ -53,11 +53,56 @@ class TestDataConfigValidation:
 
 
 class TestAppConfigLoad:
+    def test_load_bundled_default_when_none(self) -> None:
+        """Test loading with None loads bundled config."""
+        # Should load from bundled location without error
+        cfg = AppConfig.load(None)
+        # Verify it loaded valid config data
+        assert "province" in cfg.data
+        assert "island" in cfg.data
+
+    def test_load_from_directory_with_config_file(self, tmp_path: Path) -> None:
+        """Test loading from directory path."""
+        from idn_area_etl.config import DEFAULT_CONFIG_FILENAME
+
+        cfg_file = tmp_path / DEFAULT_CONFIG_FILENAME
+        cfg_file.write_text("""
+[data.province]
+batch_size = 5
+output_headers = ["code", "name"]
+filename_suffix = "test_province"
+
+[extractors.area]
+code_keywords = ["kode"]
+name_keywords = ["nama"]
+
+[extractors.island]
+code_keywords = ["kode"]
+name_keywords = ["nama"]
+""")
+
+        cfg = AppConfig.load(tmp_path)
+        assert cfg.data["province"].batch_size == 5
+        assert cfg.data["province"].filename_suffix == "test_province"
+
+    def test_load_from_directory_without_config_raises_error(self, tmp_path: Path) -> None:
+        """Test error when dir missing config."""
+        with pytest.raises(ConfigError) as exc_info:
+            AppConfig.load(tmp_path)
+        assert "not found in directory" in str(exc_info.value)
+
+    def test_load_from_nonexistent_path_raises_error(self, tmp_path: Path) -> None:
+        """Test error for invalid path."""
+        nonexistent = tmp_path / "does_not_exist.toml"
+        with pytest.raises(ConfigError) as exc_info:
+            AppConfig.load(nonexistent)
+        assert "does not exist" in str(exc_info.value)
+
     def test_raises_when_file_missing(self, tmp_path: Path) -> None:
         missing = tmp_path / "absent.toml"
         with pytest.raises(ConfigError) as exc_info:
             AppConfig.load(missing)
-        assert str(missing) in str(exc_info.value)
+        assert str(missing) in str(exc_info.value) or "does not exist" in str(exc_info.value)
 
     def test_wraps_loader_exception(self, tmp_path: Path) -> None:
         cfg_path = _touch_config(tmp_path)
@@ -75,7 +120,17 @@ class TestAppConfigLoad:
                     "batch_size": "5",
                     "output_headers": "code , name ",
                 }
-            }
+            },
+            "extractors": {
+                "area": {
+                    "code_keywords": ["kode"],
+                    "name_keywords": ["nama"],
+                },
+                "island": {
+                    "code_keywords": ["kode"],
+                    "name_keywords": ["nama"],
+                },
+            },
         }
 
         cfg = AppConfig.load(cfg_path, loader=StubLoader(payload=payload))
@@ -93,7 +148,17 @@ class TestAppConfigLoad:
                     "output_headers": ["coordinate", "code", "name"],
                     "filename_suffix": "island",
                 }
-            }
+            },
+            "extractors": {
+                "area": {
+                    "code_keywords": ["kode"],
+                    "name_keywords": ["nama"],
+                },
+                "island": {
+                    "code_keywords": ["kode"],
+                    "name_keywords": ["nama"],
+                },
+            },
         }
 
         cfg = AppConfig.load(cfg_path, loader=StubLoader(payload=payload))
@@ -132,3 +197,39 @@ class TestAppConfigLoad:
 
         with pytest.raises(ConfigError):
             AppConfig.load(cfg_path, loader=StubLoader(payload=payload))
+
+    def test_requires_extractors_area_section(self, tmp_path: Path) -> None:
+        """Test that missing [extractors.area] section raises ConfigError."""
+        cfg_path = _touch_config(tmp_path)
+        payload = {
+            "data": {"province": _base_area_config()},
+            "extractors": {
+                "island": {
+                    "code_keywords": ["kode"],
+                    "name_keywords": ["nama"],
+                }
+                # Missing "area" section
+            },
+        }
+
+        with pytest.raises(ConfigError) as exc_info:
+            AppConfig.load(cfg_path, loader=StubLoader(payload=payload))
+        assert "[extractors.area]" in str(exc_info.value)
+
+    def test_requires_extractors_island_section(self, tmp_path: Path) -> None:
+        """Test that missing [extractors.island] section raises ConfigError."""
+        cfg_path = _touch_config(tmp_path)
+        payload = {
+            "data": {"province": _base_area_config()},
+            "extractors": {
+                "area": {
+                    "code_keywords": ["kode"],
+                    "name_keywords": ["nama"],
+                }
+                # Missing "island" section
+            },
+        }
+
+        with pytest.raises(ConfigError) as exc_info:
+            AppConfig.load(cfg_path, loader=StubLoader(payload=payload))
+        assert "[extractors.island]" in str(exc_info.value)

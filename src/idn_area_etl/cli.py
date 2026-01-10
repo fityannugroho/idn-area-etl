@@ -104,13 +104,10 @@ def extract(
         int, typer.Option("--chunk-size", "-c", help="Number of pages to read per chunk")
     ] = 3,
     config_path: Annotated[
-        Path | None,
+        str | None,
         typer.Option(
             "--config",
-            exists=True,
-            file_okay=True,
-            dir_okay=False,
-            help="Path to the configuration TOML file",
+            help="Path to config file or directory containing idnareaetl.toml",
         ),
     ] = None,
     page_range: Annotated[
@@ -172,8 +169,15 @@ def extract(
     typer.echo("\n🏁 Program started")
     start_time = time.time()
 
+    # Check for migration warning
+    if config_path is None and AppConfig._check_cwd_config_exists():  # type: ignore[reportPrivateUsage]
+        typer.echo(
+            "⚠️  Found 'idnareaetl.toml' in current directory but it won't be used.\n"
+            "   Use '--config ./' to load it explicitly.\n"
+        )
+
     try:
-        config = AppConfig.load(config_path) if config_path else AppConfig.load()
+        config = AppConfig.load(config_path)
     except ConfigError as exc:
         typer.echo(f"❌ Configuration error: {exc}")
         raise typer.Exit(code=1)

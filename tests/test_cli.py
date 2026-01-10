@@ -379,8 +379,12 @@ class TestExtractFunction:
 
         class _FailingAppConfig:
             @classmethod
-            def load(cls, *args: object, **kwargs: object) -> Config:
+            def load(cls, config_path: object = None, **kwargs: object) -> Config:
                 raise ConfigError("Broken config")
+
+            @classmethod
+            def _check_cwd_config_exists(cls) -> bool:
+                return False
 
         monkeypatch.setattr(cli_mod, "AppConfig", _FailingAppConfig)
 
@@ -396,6 +400,104 @@ class TestExtractFunction:
             )
 
         assert exc_info.value.exit_code == 1
+
+    def test_extract_shows_warning_for_cwd_config(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        """Test that a warning is shown when config exists in cwd but isn't used."""
+        from idn_area_etl import cli as cli_mod
+
+        # Create a config file in the "current directory"
+        class _MockAppConfig:
+            @classmethod
+            def _check_cwd_config_exists(cls) -> bool:
+                return True
+
+            @classmethod
+            def load(cls, config_path: object = None, **kwargs: object) -> Config:
+                # Return a minimal valid config with all required areas
+                from idn_area_etl.config import Config, DataConfig, ExtractorConfig
+
+                return Config(
+                    data={
+                        "province": DataConfig(
+                            batch_size=1,
+                            output_headers=("code", "name"),
+                            filename_suffix="province",
+                        ),
+                        "regency": DataConfig(
+                            batch_size=1,
+                            output_headers=("code", "province_code", "name"),
+                            filename_suffix="regency",
+                        ),
+                        "district": DataConfig(
+                            batch_size=1,
+                            output_headers=("code", "regency_code", "name"),
+                            filename_suffix="district",
+                        ),
+                        "village": DataConfig(
+                            batch_size=1,
+                            output_headers=("code", "district_code", "name"),
+                            filename_suffix="village",
+                        ),
+                        "island": DataConfig(
+                            batch_size=1,
+                            output_headers=(
+                                "code",
+                                "regency_code",
+                                "coordinate",
+                                "is_populated",
+                                "is_outermost_small",
+                                "name",
+                            ),
+                            filename_suffix="island",
+                        ),
+                    },
+                    extractors={
+                        "area": ExtractorConfig(
+                            code_keywords=("kode",),
+                            name_keywords=("nama",),
+                        ),
+                        "island": ExtractorConfig(
+                            code_keywords=("kode",),
+                            name_keywords=("nama",),
+                        ),
+                    },
+                )
+
+        class _StubReader:
+            def __init__(self, *_: Any, **__: Any) -> None:
+                self.pages = [object()]
+
+        def _stub_read_pdf(_path: str, pages: str, flavor: str, parallel: bool) -> list[Any]:
+            return []  # No tables to avoid actual extraction
+
+        monkeypatch.setattr(cli_mod, "AppConfig", _MockAppConfig)
+        monkeypatch.setattr(cli_mod, "PdfReader", _StubReader)
+        monkeypatch.setattr(cli_mod.camelot, "read_pdf", _stub_read_pdf)
+
+        pdf_file = tmp_path / "test.pdf"
+        pdf_file.write_bytes(b"%PDF-1.4\n%fake")
+        dest = tmp_path / "out"
+
+        # Should exit with error (no data extracted) but we want to check the warning
+        try:
+            cli_mod.extract(
+                pdf_path=pdf_file,
+                chunk_size=1,
+                config_path=None,  # Explicitly None to trigger warning check
+                page_range=None,
+                output="test",
+                destination=dest,
+                parallel=False,
+                version=None,
+            )
+        except typer.Exit:
+            pass  # Expected to fail due to no data
+
+        captured = capsys.readouterr()
+        assert "Found 'idnareaetl.toml' in current directory" in captured.out
+        assert "--config ./" in captured.out
 
     def test_extract_with_custom_tmpdir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Test that --tmpdir option creates temp directories in custom location."""
