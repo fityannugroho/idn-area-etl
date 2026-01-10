@@ -10,6 +10,35 @@ DEFAULT_CONFIG_FILENAME = "idnareaetl.toml"
 
 
 @dataclass
+class ExtractorConfig:
+    """Configuration for extractor keyword matching."""
+
+    code_keywords: tuple[str, ...] = ()
+    name_keywords: tuple[str, ...] = ()
+    coordinate_keywords: tuple[str, ...] = ()
+    status_keywords: tuple[str, ...] = ()
+    info_keywords: tuple[str, ...] = ()
+    exclude_keywords: tuple[str, ...] = ()
+
+
+# Default extractor configurations
+DEFAULT_AREA_CONFIG = ExtractorConfig(
+    code_keywords=("kode",),
+    name_keywords=("nama", "provinsi", "kabupaten", "kota", "kecamatan", "desa", "kelurahan"),
+    exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
+)
+
+DEFAULT_ISLAND_CONFIG = ExtractorConfig(
+    code_keywords=("kode", "pulau"),
+    name_keywords=("nama", "pulau"),
+    coordinate_keywords=("koordinat", "kordinat"),
+    status_keywords=("bp/tbp", "bp", "tbp", "status", "keterangan"),
+    info_keywords=("keterangan", "ket"),
+    exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
+)
+
+
+@dataclass
 class DataConfig:
     batch_size: int
     output_headers: tuple[str, ...]
@@ -31,6 +60,9 @@ class Config:
     """Application configuration loaded from TOML file."""
 
     data: dict[Area, DataConfig]
+    extractors: dict[str, ExtractorConfig]
+    fuzzy_threshold: float = 80.0
+    exclude_threshold: float = 65.0
 
 
 # --- Errors -----------------------------------------------------------------
@@ -140,4 +172,66 @@ class AppConfig:
             except (ValueError, TypeError) as e:
                 raise ConfigError(e) from e
 
-        return Config(data=valid_data_config)
+        # Parse extractors configuration with defaults
+        extractors_raw = raw.get("extractors", {})
+        if not isinstance(extractors_raw, dict):
+            extractors_raw = {}
+
+        extractors_raw = cast(dict[str, Any], extractors_raw)
+
+        # Get global thresholds
+        fuzzy_threshold = float(extractors_raw.get("fuzzy_threshold", 80.0))
+        exclude_threshold = float(extractors_raw.get("exclude_threshold", 65.0))
+
+        # Parse area and island extractor configs
+        extractors: dict[str, ExtractorConfig] = {}
+
+        # Parse area extractor config
+        area_config_raw = extractors_raw.get("area", {})
+        if isinstance(area_config_raw, dict):
+            extractors["area"] = cls._parse_extractor_config(
+                cast(dict[str, Any], area_config_raw), DEFAULT_AREA_CONFIG
+            )
+        else:
+            extractors["area"] = DEFAULT_AREA_CONFIG
+
+        # Parse island extractor config
+        island_config_raw = extractors_raw.get("island", {})
+        if isinstance(island_config_raw, dict):
+            extractors["island"] = cls._parse_extractor_config(
+                cast(dict[str, Any], island_config_raw), DEFAULT_ISLAND_CONFIG
+            )
+        else:
+            extractors["island"] = DEFAULT_ISLAND_CONFIG
+
+        return Config(
+            data=valid_data_config,
+            extractors=extractors,
+            fuzzy_threshold=fuzzy_threshold,
+            exclude_threshold=exclude_threshold,
+        )
+
+    @classmethod
+    def _parse_extractor_config(
+        cls, raw: dict[str, Any], default: ExtractorConfig
+    ) -> ExtractorConfig:
+        """Parse extractor configuration with defaults."""
+
+        def to_tuple(value: Any, default: tuple[str, ...]) -> tuple[str, ...]:
+            if isinstance(value, str):
+                return tuple(s.strip().lower() for s in value.split(",") if s.strip())
+            elif isinstance(value, (list, tuple)):
+                items = cast(Iterable[object], value)
+                return tuple(str(s).strip().lower() for s in items if str(s).strip())
+            return default
+
+        return ExtractorConfig(
+            code_keywords=to_tuple(raw.get("code_keywords"), default.code_keywords),
+            name_keywords=to_tuple(raw.get("name_keywords"), default.name_keywords),
+            coordinate_keywords=to_tuple(
+                raw.get("coordinate_keywords"), default.coordinate_keywords
+            ),
+            status_keywords=to_tuple(raw.get("status_keywords"), default.status_keywords),
+            info_keywords=to_tuple(raw.get("info_keywords"), default.info_keywords),
+            exclude_keywords=to_tuple(raw.get("exclude_keywords"), default.exclude_keywords),
+        )

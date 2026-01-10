@@ -2,11 +2,11 @@ import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from types import TracebackType
-from typing import Callable
+from typing import Callable, Self
 
 import pandas as pd
 
-from idn_area_etl.config import Area, Config
+from idn_area_etl.config import DEFAULT_AREA_CONFIG, DEFAULT_ISLAND_CONFIG, Area, Config
 from idn_area_etl.utils import (
     DISTRICT_CODE_LENGTH,
     PROVINCE_CODE_LENGTH,
@@ -48,7 +48,7 @@ class TableExtractor(ABC):
             for area in self.areas
         }
 
-    def __enter__(self) -> "TableExtractor":
+    def __enter__(self) -> Self:
         self._open_outputs()
         return self
 
@@ -113,21 +113,75 @@ class AreaExtractor(TableExtractor):
         super().__init__(destination, output_name, config=config)
         self._seen_provinces: set[str] = set()
 
+        # Get extractor config with defaults
+        self._extractor_config = config.extractors.get("area", DEFAULT_AREA_CONFIG)
+        self._fuzzy_threshold = config.fuzzy_threshold
+        self._exclude_threshold = config.exclude_threshold
+
     def matches(self, df: pd.DataFrame) -> bool:
+        if df.empty or df.shape[0] < 3:  # Need at least 3 rows to check headers
+            return False
+
+        # Check rows 0-2 for headers (like IslandExtractor)
+        for i in range(min(3, len(df))):
+            normalized_headers = [normalize_words(str(col)).lower() for col in df.iloc[i]]
+
+            if len(normalized_headers) < 2:
+                continue
+
+            # Check for exclusion keywords first (fast rejection)
+            if self._has_exclusion_keywords(normalized_headers):
+                return False
+
+            # Check for 'Kode' column
+            has_kode = is_fuzzy_match(normalized_headers[0], "kode", self._fuzzy_threshold)
+
+            # Check for 'Nama Provinsi' in second column
+            has_nama_provinsi = is_fuzzy_contained(
+                "nama provinsi", normalized_headers[1], self._fuzzy_threshold
+            )
+
+            if has_kode and has_nama_provinsi:
+                return True
+
+        return False
+
+    def _has_exclusion_keywords(self, headers: list[str]) -> bool:
+        """Check if headers contain exclusion keywords."""
+        # Join headers for multi-word matching
+        joined = " ".join(headers)
+
+        for keyword in self._extractor_config.exclude_keywords:
+            # Exact match for short keywords like "NO"
+            if keyword == "no":
+                for header in headers:
+                    if header == "no":
+                        return True
+            # Fuzzy match for other keywords
+            elif is_fuzzy_contained(keyword, joined, self._exclude_threshold):
+                return True
+
+        return False
+
+    def _infer_name_columns(self, df: pd.DataFrame) -> list[int]:
+        """Identify name columns using fuzzy matching on headers."""
         if df.empty or df.shape[0] < 1:
-            return False
-        normalized_headers = [normalize_words(str(col)).lower() for col in df.iloc[0]]
+            return [1]  # Fallback to column 1
 
-        if len(normalized_headers) < 2:
-            return False
+        # Check rows 0-2 for headers (like matches() method)
+        matched_cols: set[int] = set()
+        for row_idx in range(min(3, len(df))):
+            headers = [normalize_words(str(col)).lower() for col in df.iloc[row_idx]]
 
-        # Check for 'Kode' column
-        has_kode = is_fuzzy_match(normalized_headers[0], "kode")
+            # Find columns matching name_keywords (exclude col 0 which is code)
+            for idx in range(1, len(headers)):
+                for keyword in self._extractor_config.name_keywords:
+                    if is_fuzzy_contained(keyword, headers[idx], self._fuzzy_threshold):
+                        matched_cols.add(idx)
+                        break  # Move to next column after first match
 
-        # Check for 'Nama Provinsi' in second column
-        has_nama_provinsi = is_fuzzy_contained("nama provinsi", normalized_headers[1])
-
-        return has_kode and has_nama_provinsi
+        # Return matched indices sorted, fallback to [1] if none
+        return sorted(list(matched_cols)) if matched_cols else [1]
 
     def _code_name_pairs(self, df: pd.DataFrame) -> list[tuple[str, str]]:
         if df.empty or df.shape[1] < 2:
@@ -139,17 +193,17 @@ class AreaExtractor(TableExtractor):
         # Codes as string, strip spaces
         codes = data_df.iloc[:, 0].astype(str).str.strip()
 
-        # Decide name columns based on table variant:
-        # 6-column tables -> use columns [1, 3]
-        # Wider tables (>=7 columns) -> use [1, 4, 5, 6]
-        if data_df.shape[1] == 6:
-            name_cols = [1, 3]
-        else:
-            name_cols = [1, 4, 5, 6]
+        # Dynamically infer name columns based on headers
+        name_cols = self._infer_name_columns(df)
+
+        # Validate column indices exist in DataFrame
+        valid_name_cols = [col for col in name_cols if col < data_df.shape[1]]
+        if not valid_name_cols:
+            valid_name_cols = [1]  # Fallback to column 1
 
         # Pick the first non-empty candidate per row, then clean/normalize
         names = (
-            data_df.iloc[:, name_cols]
+            data_df.iloc[:, valid_name_cols]
             .astype(str)
             .map(str.strip)  # element-wise strip
             .replace("", pd.NA)
@@ -191,6 +245,14 @@ class IslandExtractor(TableExtractor):
 
     areas = frozenset({"island"})
 
+    def __init__(self, destination: Path, output_name: str, config: Config) -> None:
+        super().__init__(destination, output_name, config=config)
+
+        # Get extractor config with defaults
+        self._extractor_config = config.extractors.get("island", DEFAULT_ISLAND_CONFIG)
+        self._fuzzy_threshold = config.fuzzy_threshold
+        self._exclude_threshold = config.exclude_threshold
+
     # ---------- header helpers (compact) ----------
     @staticmethod
     def _norm_header_row(row: pd.Series) -> list[str]:
@@ -216,22 +278,38 @@ class IslandExtractor(TableExtractor):
     def matches(self, df: pd.DataFrame) -> bool:
         # scan only a few top rows — tables in fixtures/banner starts here
         for i in range(min(3, len(df))):
-            if self._is_island_header(self._norm_header_row(df.iloc[i])):
+            headers = self._norm_header_row(df.iloc[i])
+
+            # Check for exclusion keywords first (fast rejection)
+            if self._has_exclusion_keywords(headers):
+                return False
+
+            if self._is_island_header(headers):
                 return True
         return False
 
-    @staticmethod
-    def _infer_columns(headers: list[str]) -> dict[str, int | None]:
+    def _has_exclusion_keywords(self, headers: list[str]) -> bool:
+        """Check if headers contain exclusion keywords."""
+        # Join headers for multi-word matching
+        joined = " ".join(headers)
+
+        for keyword in self._extractor_config.exclude_keywords:
+            # Exact match for short keywords like "NO"
+            if keyword == "no":
+                for header in headers:
+                    if header == "no":
+                        return True
+            # Fuzzy match for other keywords
+            elif is_fuzzy_contained(keyword, joined, self._exclude_threshold):
+                return True
+
+        return False
+
+    def _infer_columns(self, headers: list[str]) -> dict[str, int | None]:
         """
         Map header -> column index in one pass, with graceful fallbacks.
 
-        Rules:
-          - code:  "kode pulau" > "kode"
-          - name:  contains "nama" OR contains "pulau" without "kode"
-               else fallback to (idx_code + 1) if there is a column to the right.
-          - coordinate: "koordinat" | "kordinat"
-          - status:  "bp/tbp" | "status" | "bp" | "tbp" | "keterangan"
-          - info:    "keterangan" | "ket"
+        Uses configured keywords for matching with defaults as fallback.
         """
 
         def find_first(pred: Callable[[str], bool]) -> int | None:
@@ -240,23 +318,55 @@ class IslandExtractor(TableExtractor):
                     return idx
             return None
 
+        # Code column: must have both "kode" AND "pulau" to avoid matching name columns
         idx_code = find_first(
-            lambda h: is_fuzzy_contained("kode", h) and is_fuzzy_contained("pulau", h)
+            lambda h: is_fuzzy_contained("kode", h, self._fuzzy_threshold)
+            and is_fuzzy_contained("pulau", h, self._fuzzy_threshold)
         )
+        # Fallback: just "kode"
+        if idx_code is None:
+            idx_code = find_first(
+                lambda h: any(
+                    is_fuzzy_contained(kw, h, self._fuzzy_threshold)
+                    for kw in self._extractor_config.code_keywords
+                )
+            )
 
-        idx_name = find_first(lambda h: is_fuzzy_contained("nama", h))
+        # Name column: prefer "nama", fallback to "pulau" without "kode"
+        idx_name = find_first(lambda h: is_fuzzy_contained("nama", h, self._fuzzy_threshold))
+        if idx_name is None:
+            # Fallback: pulau without kode
+            idx_name = find_first(
+                lambda h: is_fuzzy_contained("pulau", h, self._fuzzy_threshold)
+                and not is_fuzzy_contained("kode", h, self._fuzzy_threshold)
+            )
 
+        # Coordinate column
         idx_coord = find_first(
-            lambda h: is_fuzzy_contained("koordinat", h) or is_fuzzy_contained("kordinat", h)
+            lambda h: any(
+                is_fuzzy_contained(kw, h, self._fuzzy_threshold)
+                for kw in self._extractor_config.coordinate_keywords
+            )
         )
 
+        # Status column
         idx_status = find_first(
-            lambda h: (is_fuzzy_contained("bp/tbp", h))
-            or (is_fuzzy_match(h, "bp") or is_fuzzy_match(h, "tbp") or is_fuzzy_match(h, "status"))
-            or (is_fuzzy_contained("keterangan", h))
+            lambda h: any(
+                is_fuzzy_contained(kw, h, self._fuzzy_threshold)
+                if len(kw) > 3
+                else is_fuzzy_match(h, kw, self._fuzzy_threshold)
+                for kw in self._extractor_config.status_keywords
+            )
         )
+
+        # Info column
         idx_info = find_first(
-            lambda h: (is_fuzzy_contained("keterangan", h)) or (is_fuzzy_match(h, "ket"))
+            lambda h: any(
+                is_fuzzy_contained(kw, h, self._fuzzy_threshold)
+                if len(kw) > 3
+                else is_fuzzy_match(h, kw, self._fuzzy_threshold)
+                for kw in self._extractor_config.info_keywords
+            )
         )
 
         return {

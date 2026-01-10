@@ -4,7 +4,12 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from idn_area_etl.config import Config, DataConfig
+from idn_area_etl.config import (
+    DEFAULT_AREA_CONFIG,
+    DEFAULT_ISLAND_CONFIG,
+    Config,
+    DataConfig,
+)
 from idn_area_etl.extractors import AreaExtractor, IslandExtractor
 from idn_area_etl.utils import (
     DISTRICT_CODE_LENGTH,
@@ -55,7 +60,13 @@ def config() -> Config:
                 ),
                 filename_suffix="island",
             ),
-        }
+        },
+        extractors={
+            "area": DEFAULT_AREA_CONFIG,
+            "island": DEFAULT_ISLAND_CONFIG,
+        },
+        fuzzy_threshold=80.0,
+        exclude_threshold=65.0,
     )
 
 
@@ -458,10 +469,10 @@ class TestAreaExtractor:
         assert outputs == {"province": [], "regency": [], "district": [], "village": []}
 
     def test_extract_rows_six_column_table(self, tmp_path: Path, config: Config):
-        # Test 6-column table variant (uses columns [1, 3] for names)
+        # Test 6-column table variant with multiple name columns
         df_6col = pd.DataFrame(
             [
-                ["K O D E", "NAMA", "COL2", "BACKUP_NAME", "COL4", "COL5"],
+                ["K O D E", "NAMA PROVINSI", "COL2", "NAMA KABUPATEN", "COL4", "COL5"],
                 ["", "", "", "", "", ""],
                 ["11", "Aceh", "", "", "", ""],
                 ["11.01", "", "", "Kabupaten Aceh Selatan", "", ""],
@@ -805,3 +816,160 @@ class TestTableExtractorIO:
 
         assert province_rows == [["11", "Aceh"]]
         assert regency_rows == [["11.02", "11", "Kabupaten Aceh Barat"]]
+
+
+# ---------- Bug Fix #2: Dynamic Column Detection Tests ----------
+
+
+class TestAreaExtractorDynamicColumns:
+    """Test dynamic column detection for AreaExtractor."""
+
+    def test_extract_3_column_table(self, tmp_path: Path, config: Config) -> None:
+        """Test 3-column table doesn't cause IndexError."""
+        df = pd.DataFrame([["Kode", "Nama Provinsi", "Extra"], ["", "", ""], ["11", "Aceh", "X"]])
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert outputs["province"] == [["11", "Aceh"]]
+
+    def test_extract_4_column_table(self, tmp_path: Path, config: Config) -> None:
+        """Test 4-column table doesn't cause IndexError."""
+        df = pd.DataFrame(
+            [["Kode", "Nama", "Col2", "Col3"], ["", "", "", ""], ["11.01", "Aceh Barat", "X", "Y"]]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert outputs["regency"] == [["11.01", "11", "Aceh Barat"]]
+
+    def test_extract_5_column_table(self, tmp_path: Path, config: Config) -> None:
+        """Test 5-column table doesn't cause IndexError."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama", "Col2", "Col3", "Col4"],
+                ["", "", "", "", ""],
+                ["11.01.01", "District", "X", "Y", "Z"],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert outputs["district"] == [["11.01.01", "11.01", "District"]]
+
+    def test_extract_with_fuzzy_matching(self, tmp_path: Path, config: Config) -> None:
+        """Test fuzzy matching handles typos in headers."""
+        df = pd.DataFrame(
+            [["Kode", "Narna Provinsi", "Extra"], ["", "", ""], ["11", "Aceh", "X"]]  # Typo: Narna
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert outputs["province"] == [["11", "Aceh"]]
+
+    def test_extract_with_fallback_column(self, tmp_path: Path, config: Config) -> None:
+        """Test fallback to column 1 when no name keywords match."""
+        df = pd.DataFrame([["Kode", "Unknown", "Extra"], ["", "", ""], ["11", "Aceh", "X"]])
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert outputs["province"] == [["11", "Aceh"]]
+
+    def test_extract_with_multiple_name_columns(self, tmp_path: Path, config: Config) -> None:
+        """Test multiple name columns are detected and used."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Provinsi", "Extra", "Nama Kabupaten"],
+                ["", "", "", ""],
+                ["11.01", "", "", "Aceh Barat"],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert outputs["regency"] == [["11.01", "11", "Aceh Barat"]]
+
+    def test_extract_multi_row_headers(self, tmp_path: Path, config: Config) -> None:
+        """Test extraction from tables with multi-row headers."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Provinsi", "", "", "Nama", "", "Desa"],
+                ["", "", "Kab", "Kota", "Kecamatan", "Kelurahan", ""],
+                ["", "", "", "", "", "", ""],
+                ["11", "Aceh", "", "", "", "", ""],
+                ["11.01.01.2001", "", "", "", "", "", "Keude Bakongan"],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 2
+        assert outputs["province"] == [["11", "Aceh"]]
+        assert outputs["village"] == [["11.01.01.2001", "11.01.01", "Keude Bakongan"]]
+
+
+class TestAreaExtractorExclusionRules:
+    """Test exclusion keyword filtering for AreaExtractor via public API."""
+
+    def test_matches_rejects_table_with_no_column(self, tmp_path: Path, config: Config) -> None:
+        """Test tables with 'NO' column are rejected."""
+        df = pd.DataFrame([["NO", "Kode", "Nama Provinsi"], ["1", "11", "Aceh"]])
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_rejects_table_with_ibukota(self, tmp_path: Path, config: Config) -> None:
+        """Test tables with 'Ibu Kota' column are rejected."""
+        df = pd.DataFrame([["Kode", "Nama Provinsi", "Ibu Kota"], ["11", "Aceh", "Banda Aceh"]])
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_rejects_table_with_jumlah_penduduk(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test tables with 'Jumlah Penduduk' column are rejected."""
+        df = pd.DataFrame([["Kode", "Nama Provinsi", "Jumlah Penduduk"], ["11", "Aceh", "5000000"]])
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_accepts_valid_detail_table(self, tmp_path: Path, config: Config) -> None:
+        """Test valid detail tables without exclusion keywords are accepted."""
+        df = pd.DataFrame([["Kode", "Nama Provinsi", "Extra"], ["", "", ""], ["11", "Aceh", "X"]])
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert ex.matches(df)
+
+
+class TestIslandExtractorExclusionRules:
+    """Test IslandExtractor exclusion rules via public API."""
+
+    def test_matches_rejects_island_summary_table(self, tmp_path: Path, config: Config) -> None:
+        """Test island summary tables with 'NO' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["NO", "Kode Pulau", "Nama Pulau", "Jumlah Penduduk"],
+                ["1", "12.01.40001", "Pulau X", "5000"],
+            ]
+        )
+
+        with _island_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_accepts_valid_island_table(self, tmp_path: Path, config: Config) -> None:
+        """Test valid island tables are accepted."""
+        df = pd.DataFrame(
+            [
+                ["Kode Pulau", "Nama", "Koordinat", "BP/TBP", "Keterangan"],
+                ["12.01.40001", "Pulau X", "03°19'03.44\" U  097°07'41.73\" T", "BP", ""],
+            ]
+        )
+
+        with _island_extractor(tmp_path, config) as ex:
+            assert ex.matches(df)
