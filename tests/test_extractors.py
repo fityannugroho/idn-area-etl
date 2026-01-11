@@ -4,7 +4,13 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from idn_area_etl.config import Config, DataConfig, ExtractorConfig
+from idn_area_etl.config import (
+    AreaExtractorConfig,
+    AreaTypeConfig,
+    Config,
+    DataConfig,
+    IslandExtractorConfig,
+)
 from idn_area_etl.extractors import AreaExtractor, IslandExtractor
 from idn_area_etl.utils import (
     DISTRICT_CODE_LENGTH,
@@ -56,29 +62,22 @@ def config() -> Config:
                 filename_suffix="island",
             ),
         },
-        extractors={
-            "area": ExtractorConfig(
-                code_keywords=("kode",),
-                name_keywords=(
-                    "nama",
-                    "provinsi",
-                    "kabupaten",
-                    "kota",
-                    "kecamatan",
-                    "desa",
-                    "kelurahan",
-                ),
-                exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
-            ),
-            "island": ExtractorConfig(
-                code_keywords=("kode", "pulau"),
-                name_keywords=("nama", "pulau"),
-                coordinate_keywords=("koordinat", "kordinat"),
-                status_keywords=("bp/tbp", "bp", "tbp", "status", "keterangan"),
-                info_keywords=("keterangan", "ket"),
-                exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
-            ),
-        },
+        area_extractor=AreaExtractorConfig(
+            code_keywords=("kode",),
+            exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
+            province=AreaTypeConfig(name_keywords=("nama", "provinsi")),
+            regency=AreaTypeConfig(name_keywords=("nama", "kabupaten", "kota")),
+            district=AreaTypeConfig(name_keywords=("nama", "kecamatan")),
+            village=AreaTypeConfig(name_keywords=("nama", "desa", "kelurahan")),
+        ),
+        island_extractor=IslandExtractorConfig(
+            code_keywords=("kode", "pulau"),
+            name_keywords=("nama", "pulau"),
+            coordinate_keywords=("koordinat", "kordinat"),
+            is_populated_keywords=("bp/tbp", "bp", "tbp", "status", "keterangan"),
+            is_outermost_small_keywords=("keterangan", "ket"),
+            exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
+        ),
         fuzzy_threshold=80.0,
         exclude_threshold=65.0,
     )
@@ -925,6 +924,21 @@ class TestAreaExtractorDynamicColumns:
         assert count == 2
         assert outputs["province"] == [["11", "Aceh"]]
         assert outputs["village"] == [["11.01.01.2001", "11.01.01", "Keude Bakongan"]]
+
+    def test_extract_swapped_columns(self, tmp_path: Path, config: Config) -> None:
+        """Test district name extraction from swapped column order."""
+        df = pd.DataFrame(
+            [
+                ["K O D E", "NAMA PROVINSI", "N A M A / J U M L A H", "", "", "", ""],
+                ["", "", "D E S A", "KELURAHAN", "KECAMATAN", "KABUPATEN", "KOTA"],
+                ["", "", "", "", "", "", ""],
+                ["11.01.01", "", "7", "", "Bakongan", "", ""],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+        assert count == 1
+        assert outputs["district"] == [["11.01.01", "11.01", "Bakongan"]]
 
 
 class TestAreaExtractorExclusionRules:

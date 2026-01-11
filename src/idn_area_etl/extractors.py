@@ -113,8 +113,8 @@ class AreaExtractor(TableExtractor):
         super().__init__(destination, output_name, config=config)
         self._seen_provinces: set[str] = set()
 
-        # Get extractor config - required to exist
-        self._extractor_config = config.extractors["area"]
+        # Get extractor config from new structure
+        self._extractor_config = config.area_extractor
         self._fuzzy_threshold = config.fuzzy_threshold
         self._exclude_threshold = config.exclude_threshold
 
@@ -163,25 +163,134 @@ class AreaExtractor(TableExtractor):
 
         return False
 
-    def _infer_name_columns(self, df: pd.DataFrame) -> list[int]:
-        """Identify name columns using fuzzy matching on headers."""
+    def _find_columns_by_keywords(
+        self,
+        headers: list[str],
+        keywords: tuple[str, ...],
+    ) -> list[int]:
+        """
+        Find all column indices that match given keywords above threshold.
+
+        Returns list of matching column indices, excluding column 0 (code column).
+        Columns are sorted by match quality (best score first, then longest keyword).
+        """
+        from rapidfuzz import fuzz
+
+        matches: list[tuple[int, float, int]] = []  # (col_idx, score, keyword_len)
+
+        # Score each column (except 0) against all keywords
+        for idx in range(1, len(headers)):
+            header = headers[idx].lower()
+            best_score_for_col = 0.0
+            best_kw_len_for_col = 0
+
+            for keyword in keywords:
+                keyword_lower = keyword.lower()
+
+                # Try exact substring match first
+                if keyword_lower in header:
+                    score = 100.0
+                else:
+                    # Use partial_ratio for fuzzy matching
+                    if len(keyword_lower) > len(header):
+                        score = fuzz.ratio(keyword_lower, header)
+                    else:
+                        score = fuzz.partial_ratio(keyword_lower, header)
+
+                # Track best score and keyword length for this column
+                if score >= self._fuzzy_threshold:
+                    if score > best_score_for_col or (
+                        score == best_score_for_col and len(keyword_lower) > best_kw_len_for_col
+                    ):
+                        best_score_for_col = score
+                        best_kw_len_for_col = len(keyword_lower)
+
+            if best_score_for_col >= self._fuzzy_threshold:
+                matches.append((idx, best_score_for_col, best_kw_len_for_col))
+
+        # Sort by score (descending), then keyword length (descending)
+        matches.sort(key=lambda x: (x[1], x[2]), reverse=True)
+
+        return [idx for idx, _, _ in matches]
+
+    def _infer_column_map(self, df: pd.DataFrame) -> dict[str, dict[str, list[int] | int]]:
+        """
+        Identify code and name columns for each area type using fuzzy matching.
+
+        Returns:
+            {
+                "province": {"code": 0, "name": [idx1, idx2, ...]},
+                "regency": {"code": 0, "name": [idx1, idx2, ...]},
+                "district": {"code": 0, "name": [idx1, idx2, ...]},
+                "village": {"code": 0, "name": [idx1, idx2, ...]},
+            }
+
+            Where "code" is always int and "name" is always list[int].
+        """
         if df.empty or df.shape[0] < 1:
-            return [1]  # Fallback to column 1
+            # Fallback
+            return {
+                "province": {"code": 0, "name": [1]},
+                "regency": {"code": 0, "name": [1]},
+                "district": {"code": 0, "name": [1]},
+                "village": {"code": 0, "name": [1]},
+            }
 
-        # Check rows 0-2 for headers (like matches() method)
-        matched_cols: set[int] = set()
+        # Normalize headers from first 3 rows (combine multi-row headers)
+        all_headers: list[str] = []
         for row_idx in range(min(3, len(df))):
-            headers = [normalize_words(str(col)).lower() for col in df.iloc[row_idx]]
+            row_headers = [normalize_words(str(col)).lower() for col in df.iloc[row_idx]]
+            if not all_headers:
+                all_headers = row_headers
+            else:
+                # Combine with previous rows (concatenate with space)
+                all_headers = [
+                    (
+                        f"{all_headers[i]} {row_headers[i]}".strip()
+                        if i < len(row_headers)
+                        else all_headers[i]
+                    )
+                    for i in range(max(len(all_headers), len(row_headers)))
+                ]
 
-            # Find columns matching name_keywords (exclude col 0 which is code)
-            for idx in range(1, len(headers)):
-                for keyword in self._extractor_config.name_keywords:
-                    if is_fuzzy_contained(keyword, headers[idx], self._fuzzy_threshold):
-                        matched_cols.add(idx)
-                        break  # Move to next column after first match
+        # For each area type, find name columns using type-specific keywords
+        result: dict[str, dict[str, list[int] | int]] = {}
 
-        # Return matched indices sorted, fallback to [1] if none
-        return sorted(list(matched_cols)) if matched_cols else [1]
+        for area_type in ["province", "regency", "district", "village"]:
+            area_config = getattr(self._extractor_config, area_type)
+
+            # Code column: use type-specific if provided, otherwise use shared
+            code_keywords = (
+                area_config.code_keywords
+                if area_config.code_keywords
+                else self._extractor_config.code_keywords
+            )
+
+            # For code column, check column 0 first (most common case)
+            code_idx = 0  # Default to column 0
+            if code_keywords:
+                # Verify column 0 matches code keywords
+                if not any(
+                    is_fuzzy_contained(kw, all_headers[0], self._fuzzy_threshold)
+                    for kw in code_keywords
+                ):
+                    # If column 0 doesn't match, search for it
+                    for idx in range(len(all_headers)):
+                        if any(
+                            is_fuzzy_contained(kw, all_headers[idx], self._fuzzy_threshold)
+                            for kw in code_keywords
+                        ):
+                            code_idx = idx
+                            break
+
+            # Name columns: use type-specific keywords, return all matches
+            name_indices = self._find_columns_by_keywords(all_headers, area_config.name_keywords)
+            if not name_indices:
+                name_indices = [1]  # Fallback to column 1
+
+            result[area_type] = {"code": code_idx, "name": name_indices}
+
+        return result
 
     def _code_name_pairs(self, df: pd.DataFrame) -> list[tuple[str, str]]:
         if df.empty or df.shape[1] < 2:
@@ -190,31 +299,68 @@ class AreaExtractor(TableExtractor):
         # Skip header rows; keep only data rows
         data_df = df.iloc[2:, :]
 
-        # Codes as string, strip spaces
-        codes = data_df.iloc[:, 0].astype(str).str.strip()
+        # Get column mapping once
+        col_map = self._infer_column_map(df)
 
-        # Dynamically infer name columns based on headers
-        name_cols = self._infer_name_columns(df)
+        pairs: list[tuple[str, str]] = []
 
-        # Validate column indices exist in DataFrame
-        valid_name_cols = [col for col in name_cols if col < data_df.shape[1]]
-        if not valid_name_cols:
-            valid_name_cols = [1]  # Fallback to column 1
+        # Process each row
+        for _, row in data_df.iterrows():
+            # Get code from column 0 (always)
+            code = str(row.iloc[0]).strip()
+            if not code:
+                continue
 
-        # Pick the first non-empty candidate per row, then clean/normalize
-        names = (
-            data_df.iloc[:, valid_name_cols]
-            .astype(str)
-            .map(str.strip)  # element-wise strip
-            .replace("", pd.NA)
-            .bfill(axis=1)
-            .iloc[:, 0]
-            .fillna("")
-            .map(lambda s: normalize_words(clean_name(fix_wrapped_name(s))) if s else "")
-        )
-        # Keep only rows that have both code and name
-        mask = codes.ne("") & names.ne("")
-        return list(zip(codes[mask].tolist(), names[mask].tolist()))
+            # Determine area type from code length
+            code_len = len(code)
+            area_type: str | None = None
+
+            if code_len == PROVINCE_CODE_LENGTH:
+                area_type = "province"
+            elif code_len == REGENCY_CODE_LENGTH:
+                area_type = "regency"
+            elif code_len == DISTRICT_CODE_LENGTH:
+                area_type = "district"
+            elif code_len == VILLAGE_CODE_LENGTH:
+                area_type = "village"
+            else:
+                continue  # Invalid code format
+
+            # Get name from appropriate columns based on area type
+            # Use bfill to pick first non-empty value from matching columns
+            name_col_value = col_map[area_type]["name"]
+            name_indices: list[int]
+            if isinstance(name_col_value, list):
+                name_indices = name_col_value
+            else:
+                # Must be int
+                name_indices = [name_col_value]
+
+            # Filter valid indices
+            valid_indices = [idx for idx in name_indices if idx < len(row)]
+            if not valid_indices:
+                continue
+
+            # Get values from matching columns and pick first non-empty with alphabetic chars
+            # Skip purely numeric values (counts, IDs) and only pick actual names
+            name = ""
+            for idx in valid_indices:
+                val = str(row.iloc[idx]).strip()
+                # Check if value is non-empty and contains at least some alphabetic characters
+                # This filters out purely numeric values like "7" (counts) or "11.01" (codes)
+                if val and any(c.isalpha() for c in val):
+                    name = val
+                    break
+
+            # Clean and normalize name
+            if name:
+                name = normalize_words(clean_name(fix_wrapped_name(name)))
+
+            # Keep only rows that have both code and name
+            if code and name:
+                pairs.append((code, name))
+
+        return pairs
 
     def _extract_rows(self, df: pd.DataFrame) -> dict[Area, list[list[str]]]:
         rows_by_key: dict[Area, list[list[str]]] = {
@@ -248,8 +394,8 @@ class IslandExtractor(TableExtractor):
     def __init__(self, destination: Path, output_name: str, config: Config) -> None:
         super().__init__(destination, output_name, config=config)
 
-        # Get extractor config - required to exist
-        self._extractor_config = config.extractors["island"]
+        # Get extractor config from new structure
+        self._extractor_config = config.island_extractor
         self._fuzzy_threshold = config.fuzzy_threshold
         self._exclude_threshold = config.exclude_threshold
 
@@ -355,7 +501,7 @@ class IslandExtractor(TableExtractor):
                 is_fuzzy_contained(kw, h, self._fuzzy_threshold)
                 if len(kw) > 3
                 else is_fuzzy_match(h, kw, self._fuzzy_threshold)
-                for kw in self._extractor_config.status_keywords
+                for kw in self._extractor_config.is_populated_keywords
             )
         )
 
@@ -365,7 +511,7 @@ class IslandExtractor(TableExtractor):
                 is_fuzzy_contained(kw, h, self._fuzzy_threshold)
                 if len(kw) > 3
                 else is_fuzzy_match(h, kw, self._fuzzy_threshold)
-                for kw in self._extractor_config.info_keywords
+                for kw in self._extractor_config.is_outermost_small_keywords
             )
         )
 
