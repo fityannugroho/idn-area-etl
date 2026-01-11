@@ -975,6 +975,130 @@ class TestAreaExtractorExclusionRules:
             assert ex.matches(df)
 
 
+# ---------- Phase 2: Header Detection Tests ----------
+
+
+class TestAreaExtractorHeaderDetection:
+    """Test header detection logic for AreaExtractor."""
+
+    def test_find_header_row_identifies_correct_row(self, tmp_path: Path, config: Config):
+        """Test _find_header_row() correctly identifies header position."""
+        ex = _area_extractor(tmp_path, config)
+
+        # Header in row 0 (normal case)
+        df_row0 = pd.DataFrame(
+            [
+                ["K O D E", "NAMA PROVINSI", "COL2"],
+                ["", "", ""],
+                ["11", "Aceh", ""],
+            ]
+        )
+        assert ex._find_header_row(df_row0) == 0
+
+        # No header found (malformed)
+        df_no_header = pd.DataFrame(
+            [
+                ["DATA", "DATA", "DATA"],
+                ["11", "Aceh", ""],
+            ]
+        )
+        assert ex._find_header_row(df_no_header) is None
+
+    def test_is_sub_header_row_distinguishes_header_from_data(self, tmp_path: Path, config: Config):
+        """Test _is_sub_header_row() distinguishes sub-header from data rows."""
+        ex = _area_extractor(tmp_path, config)
+
+        # Legitimate sub-header
+        sub_header_row = pd.Series(["", "", "KAB", "KOTA", "KECAMATAN", "KELURAHAN", "D E S A"])
+        assert ex._is_sub_header_row(sub_header_row) is True
+
+        # Data row with code
+        data_row_with_code = pd.Series(["11.01", "Kabupaten Aceh Selatan", "", "", "", "", ""])
+        assert ex._is_sub_header_row(data_row_with_code) is False
+
+        # Data row with long text (keterangan)
+        data_row_long_text = pd.Series(
+            [
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "Perbaikan nama desa sesuai Qanun No. 34/2006 dan rekomendasi...",
+            ]
+        )
+        assert ex._is_sub_header_row(data_row_long_text) is False
+
+    def test_extract_with_multi_row_headers_validated(self, tmp_path: Path, config: Config):
+        """Test extraction correctly handles validated multi-row headers."""
+        df = pd.DataFrame(
+            [
+                ["K O D E", "NAMA PROVINSI", "JUMLAH", "", "NAMA", "", ""],
+                ["", "", "KAB", "KOTA", "KECAMATAN", "KELURAHAN", "D E S A"],
+                ["11", "Aceh", "", "", "", "", ""],
+                ["11.01", "", "", "", "", "", "Kabupaten Aceh Selatan"],
+                ["11.01.01", "", "", "", "Bakongan", "", ""],
+                ["11.01.01.2001", "", "", "", "", "", "Keude Bakongan"],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 4
+        assert outputs["province"] == [["11", "Aceh"]]
+        assert outputs["regency"] == [["11.01", "11", "Kabupaten Aceh Selatan"]]
+        assert outputs["district"] == [["11.01.01", "11.01", "Bakongan"]]
+        assert outputs["village"] == [["11.01.01.2001", "11.01.01", "Keude Bakongan"]]
+
+    def test_extract_2022_keterangan_not_as_name(self, tmp_path: Path, config: Config):
+        """
+        Test that columns are correctly detected and keterangan is not used as name.
+
+        Uses fixture: tests/fixtures/2022-areas-p53-54_p2246_p3337.pdf
+
+        Before fix: Keterangan column (containing "Perbaikan nama desa...") was selected as name
+        After fix: Actual name column should be selected
+        """
+        import camelot
+        from camelot.core import TableList
+
+        from idn_area_etl.utils import CamelotTempDir
+
+        pdf_path = Path(__file__).parent / "fixtures" / "2022-areas-p53-54_p2246_p3337.pdf"
+
+        with CamelotTempDir():
+            tables: TableList = camelot.read_pdf(str(pdf_path), pages="1", flavor="lattice")
+
+        assert len(tables) > 0, "PDF should contain at least one table"
+
+        df: pd.DataFrame = tables[0].df
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count > 0, "Should extract at least one row"
+        villages = outputs["village"]
+        assert len(villages) > 0, "Should extract village data"
+
+        # Test specific problematic village
+        village_2024 = [v for v in villages if v[0] == "11.02.11.2024"]
+        assert len(village_2024) == 1, "Should find village 11.02.11.2024"
+
+        name = village_2024[0][2]
+
+        # Should contain actual name
+        assert "sepekhinding" in name.lower(), f"Expected 'Sepekhinding' in name, got: {name}"
+
+        # Should NOT contain keterangan text
+        assert "qanun" not in name.lower(), (
+            f"Name should not contain 'qanun' (keterangan text), got: {name}"
+        )
+        assert "perbaikan" not in name.lower(), (
+            f"Name should not contain 'perbaikan' (keterangan text), got: {name}"
+        )
+
+
 class TestIslandExtractorExclusionRules:
     """Test IslandExtractor exclusion rules via public API."""
 

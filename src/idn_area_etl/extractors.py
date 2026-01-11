@@ -136,12 +136,26 @@ class AreaExtractor(TableExtractor):
             # Check for 'Kode' column
             has_kode = is_fuzzy_match(normalized_headers[0], "kode", self._fuzzy_threshold)
 
-            # Check for 'Nama Provinsi' in second column
-            has_nama_provinsi = is_fuzzy_contained(
-                "nama provinsi", normalized_headers[1], self._fuzzy_threshold
+            # Check for 'Nama' or any area-type keyword in any subsequent column
+            # This is more flexible than requiring "nama provinsi" specifically
+            area_keywords = [
+                "nama",
+                "provinsi",
+                "kabupaten",
+                "kota",
+                "kecamatan",
+                "desa",
+                "kelurahan",
+            ]
+            has_nama = any(
+                any(
+                    is_fuzzy_contained(keyword, h, self._fuzzy_threshold)
+                    for keyword in area_keywords
+                )
+                for h in normalized_headers[1:]
             )
 
-            if has_kode and has_nama_provinsi:
+            if has_kode and has_nama:
                 return True
 
         return False
@@ -213,9 +227,95 @@ class AreaExtractor(TableExtractor):
 
         return [idx for idx, _, _ in matches]
 
+    def _find_header_row(self, df: pd.DataFrame) -> int | None:
+        """
+        Find which row contains area table headers.
+
+        Looks for rows with:
+        - "kode" in first column
+        - "nama" or any area-type keyword in subsequent columns
+
+        Returns:
+            Row index (0-2) or None if not found
+        """
+        if df.empty or df.shape[0] < 1:
+            return None
+
+        for row_idx in range(min(3, len(df))):
+            normalized_headers = [normalize_words(str(col)).lower() for col in df.iloc[row_idx]]
+
+            if len(normalized_headers) < 2:
+                continue
+
+            # Check for 'Kode' column in position 0
+            has_kode = is_fuzzy_match(normalized_headers[0], "kode", self._fuzzy_threshold)
+
+            # Check for 'Nama' or any area-type keyword in any subsequent column
+            # This is more flexible than requiring "nama provinsi" specifically
+            area_keywords = [
+                "nama",
+                "provinsi",
+                "kabupaten",
+                "kota",
+                "kecamatan",
+                "desa",
+                "kelurahan",
+            ]
+            has_nama = any(
+                any(
+                    is_fuzzy_contained(keyword, h, self._fuzzy_threshold)
+                    for keyword in area_keywords
+                )
+                for h in normalized_headers[1:]
+            )
+
+            if has_kode and has_nama:
+                return row_idx
+
+        return None
+
+    def _is_sub_header_row(self, row: pd.Series) -> bool:
+        """
+        Check if row is a sub-header (e.g., 'KAB', 'KOTA', 'KECAMATAN') vs data row.
+
+        Sub-header characteristics:
+        - Column 0 is empty or non-code
+        - Contains area type keywords (kabupaten, kota, kecamatan, desa, kelurahan)
+        - No actual area codes (no patterns like "11.01")
+        - Short text cells (not long descriptions)
+
+        Returns:
+            True if row is a sub-header, False if data
+        """
+        # Check column 0 - should be empty or non-code for sub-header
+        col0 = str(row.iloc[0]).strip()
+        if col0:
+            # If column 0 has content, check if it's an area code
+            if re.match(r"^\d+(\.\d+)*$", col0):
+                return False  # Data row with code
+
+        # Normalize all cells
+        normalized = [normalize_words(str(col)).lower() for col in row]
+
+        # Check for sub-header keywords
+        sub_header_keywords = ["kab", "kabupaten", "kota", "kecamatan", "kelurahan", "desa"]
+        has_keywords = any(
+            any(keyword in cell for keyword in sub_header_keywords) for cell in normalized if cell
+        )
+
+        if not has_keywords:
+            return False
+
+        # Validate it doesn't look like data (no long text)
+        has_long_text = any(len(str(cell).strip()) > 30 for cell in row)
+
+        return not has_long_text
+
     def _infer_column_map(self, df: pd.DataFrame) -> dict[str, dict[str, list[int] | int]]:
         """
         Identify code and name columns for each area type using fuzzy matching.
+
+        Uses validated header detection to prevent data row leakage.
 
         Returns:
             {
@@ -236,22 +336,25 @@ class AreaExtractor(TableExtractor):
                 "village": {"code": 0, "name": [1]},
             }
 
-        # Normalize headers from first 3 rows (combine multi-row headers)
-        all_headers: list[str] = []
-        for row_idx in range(min(3, len(df))):
-            row_headers = [normalize_words(str(col)).lower() for col in df.iloc[row_idx]]
-            if not all_headers:
-                all_headers = row_headers
-            else:
-                # Combine with previous rows (concatenate with space)
-                all_headers = [
-                    (
-                        f"{all_headers[i]} {row_headers[i]}".strip()
-                        if i < len(row_headers)
-                        else all_headers[i]
-                    )
-                    for i in range(max(len(all_headers), len(row_headers)))
-                ]
+        # STEP 1: Find the actual header row
+        header_idx = self._find_header_row(df)
+        if header_idx is None:
+            # Fallback: use row 0 as header
+            header_idx = 0
+
+        # STEP 2: Get main header
+        all_headers = [normalize_words(str(col)).lower() for col in df.iloc[header_idx]]
+
+        # STEP 3: Check if next row is sub-header and merge if so
+        if header_idx + 1 < len(df) and self._is_sub_header_row(df.iloc[header_idx + 1]):
+            sub_headers = [normalize_words(str(col)).lower() for col in df.iloc[header_idx + 1]]
+            # Merge: "nama provinsi" + "kabupaten" = "nama provinsi kabupaten"
+            all_headers = [
+                f"{all_headers[i]} {sub_headers[i]}".strip()
+                if i < len(sub_headers)
+                else all_headers[i]
+                for i in range(len(all_headers))
+            ]
 
         # For each area type, find name columns using type-specific keywords
         result: dict[str, dict[str, list[int] | int]] = {}
@@ -296,8 +399,21 @@ class AreaExtractor(TableExtractor):
         if df.empty or df.shape[1] < 2:
             return []
 
-        # Skip header rows; keep only data rows
-        data_df = df.iloc[2:, :]
+        # STEP 1: Find where data starts (after headers)
+        header_idx = self._find_header_row(df)
+        if header_idx is None:
+            header_idx = 0  # Fallback
+
+        # STEP 2: Determine data start position
+        # If there's a sub-header after main header, data starts at header_idx + 2
+        # Otherwise, data starts at header_idx + 1
+        if header_idx + 1 < len(df) and self._is_sub_header_row(df.iloc[header_idx + 1]):
+            data_start = header_idx + 2
+        else:
+            data_start = header_idx + 1
+
+        # STEP 3: Extract data rows only
+        data_df = df.iloc[data_start:, :]
 
         # Get column mapping once
         col_map = self._infer_column_map(df)
@@ -351,6 +467,15 @@ class AreaExtractor(TableExtractor):
                 if val and any(c.isalpha() for c in val):
                     name = val
                     break
+
+            # Fallback: if no name found in mapped columns, scan all columns after code
+            # This handles cases where data is in non-standard columns
+            if not name:
+                for idx in range(1, len(row)):
+                    val = str(row.iloc[idx]).strip()
+                    if val and any(c.isalpha() for c in val):
+                        name = val
+                        break
 
             # Clean and normalize name
             if name:
