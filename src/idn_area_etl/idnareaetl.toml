@@ -36,7 +36,22 @@ exclude_threshold = 65.0
 
 [extractors.area]
 code_keywords = ["kode"]
-exclude_keywords = ["no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"]
+exclude_keywords = [
+  "no",
+  "ibukota",
+  "jumlah penduduk",
+  "penduduk",
+  "ibu kota",
+  "laki-laki",
+  "laki laki",
+  "perempuan",
+  "l/p",
+  "total",
+  "rata-rata",
+  "rata rata",
+  "persentase",
+  "persen",
+]
 
 [extractors.area.province]
 name_keywords = ["nama provinsi", "provinsi", "nama"]
@@ -56,4 +71,19 @@ name_keywords = ["nama", "pulau"]
 coordinate_keywords = ["koordinat", "kordinat"]
 status_keywords = ["bp/tbp", "bp", "tbp", "status", "keterangan"]
 info_keywords = ["keterangan", "ket"]
-exclude_keywords = ["no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"]
+exclude_keywords = [
+  "no",
+  "ibukota",
+  "jumlah penduduk",
+  "penduduk",
+  "ibu kota",
+  "laki-laki",
+  "laki laki",
+  "perempuan",
+  "l/p",
+  "total",
+  "rata-rata",
+  "rata rata",
+  "persentase",
+  "persen",
+]

@@ -1228,7 +1228,7 @@ class TestAreaExtractorPopulationTableRejection:
         Test population table from 2025 PDF is correctly rejected.
 
         Uses fixture: tests/fixtures/table_types_2025.pdf
-        Table 5 (page 2223): Population statistics with Laki-laki/Perempuan columns
+        Page 6: Population statistics with Laki-laki/Perempuan columns
         """
         from typing import cast
 
@@ -1240,12 +1240,12 @@ class TestAreaExtractorPopulationTableRejection:
         pdf_path = Path(__file__).parent / "fixtures" / "table_types_2025.pdf"
 
         with CamelotTempDir():
-            tables: TableList = camelot.read_pdf(str(pdf_path), pages="2223", flavor="lattice")
+            tables: TableList = camelot.read_pdf(str(pdf_path), pages="6", flavor="lattice")
 
         assert len(tables) > 0, "PDF page should contain at least one table"
 
-        # Table 5: Population statistics (should be rejected)
-        population_table = cast(pd.DataFrame, tables[4].df)
+        # Page 6: Population statistics table (should be rejected)
+        population_table = cast(pd.DataFrame, tables[0].df)
 
         with _area_extractor(tmp_path, config) as ex:
             assert not ex.matches(population_table), "Population table should be rejected"
