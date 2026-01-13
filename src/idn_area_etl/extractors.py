@@ -113,8 +113,8 @@ class AreaExtractor(TableExtractor):
         super().__init__(destination, output_name, config=config)
         self._seen_provinces: set[str] = set()
 
-        # Get extractor config from new structure
-        self._extractor_config = config.area_extractor
+        # Get extractor config from extractors.area
+        self._extractor_config = config.extractors.area
         self._fuzzy_threshold = config.fuzzy_threshold
         self._exclude_threshold = config.exclude_threshold
 
@@ -519,8 +519,8 @@ class IslandExtractor(TableExtractor):
     def __init__(self, destination: Path, output_name: str, config: Config) -> None:
         super().__init__(destination, output_name, config=config)
 
-        # Get extractor config from new structure
-        self._extractor_config = config.island_extractor
+        # Get extractor config from extractors.island
+        self._extractor_config = config.extractors.island
         self._fuzzy_threshold = config.fuzzy_threshold
         self._exclude_threshold = config.exclude_threshold
 

@@ -421,6 +421,7 @@ class TestExtractFunction:
                     AreaTypeConfig,
                     Config,
                     DataConfig,
+                    ExtractorsConfig,
                     IslandExtractorConfig,
                 )
 
@@ -459,21 +460,23 @@ class TestExtractFunction:
                             filename_suffix="island",
                         ),
                     },
-                    area_extractor=AreaExtractorConfig(
-                        code_keywords=("kode",),
-                        exclude_keywords=(),
-                        province=AreaTypeConfig(name_keywords=("nama",)),
-                        regency=AreaTypeConfig(name_keywords=("nama",)),
-                        district=AreaTypeConfig(name_keywords=("nama",)),
-                        village=AreaTypeConfig(name_keywords=("nama",)),
-                    ),
-                    island_extractor=IslandExtractorConfig(
-                        code_keywords=("kode",),
-                        name_keywords=("nama",),
-                        coordinate_keywords=(),
-                        is_populated_keywords=(),
-                        is_outermost_small_keywords=(),
-                        exclude_keywords=(),
+                    extractors=ExtractorsConfig(
+                        area=AreaExtractorConfig(
+                            code_keywords=("kode",),
+                            exclude_keywords=(),
+                            province=AreaTypeConfig(name_keywords=("nama",)),
+                            regency=AreaTypeConfig(name_keywords=("nama",)),
+                            district=AreaTypeConfig(name_keywords=("nama",)),
+                            village=AreaTypeConfig(name_keywords=("nama",)),
+                        ),
+                        island=IslandExtractorConfig(
+                            code_keywords=("kode",),
+                            name_keywords=("nama",),
+                            coordinate_keywords=(),
+                            is_populated_keywords=(),
+                            is_outermost_small_keywords=(),
+                            exclude_keywords=(),
+                        ),
                     ),
                 )
 

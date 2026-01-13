@@ -42,6 +42,14 @@ class IslandExtractorConfig:
 
 
 @dataclass
+class ExtractorsConfig:
+    """Configuration for all extractors."""
+
+    area: AreaExtractorConfig
+    island: IslandExtractorConfig
+
+
+@dataclass
 class DataConfig:
     batch_size: int
     output_headers: tuple[str, ...]
@@ -63,8 +71,7 @@ class Config:
     """Application configuration loaded from TOML file."""
 
     data: dict[Area, DataConfig]
-    area_extractor: AreaExtractorConfig
-    island_extractor: IslandExtractorConfig
+    extractors: ExtractorsConfig
     fuzzy_threshold: float = 80.0
     exclude_threshold: float = 65.0
 
@@ -250,8 +257,10 @@ class AppConfig:
 
         return Config(
             data=valid_data_config,
-            area_extractor=area_extractor,
-            island_extractor=island_extractor,
+            extractors=ExtractorsConfig(
+                area=area_extractor,
+                island=island_extractor,
+            ),
             fuzzy_threshold=fuzzy_threshold,
             exclude_threshold=exclude_threshold,
         )
