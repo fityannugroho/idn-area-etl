@@ -248,4 +248,4 @@ uv build
 
 You can customize the behavior of the program by providing a configuration file in TOML format and passing its path using the `--config` option.
 
-If no `--config` option is provided, the program will look for a default configuration file in [`idnareaetl.toml`](idnareaetl.toml).
+If no `--config` option is provided, the program will look for a default configuration file in [`idnareaetl.toml`](./src/idn_area_etl/idnareaetl.toml).
