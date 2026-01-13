@@ -10,15 +10,43 @@ DEFAULT_CONFIG_FILENAME = "idnareaetl.toml"
 
 
 @dataclass
-class ExtractorConfig:
-    """Configuration for extractor keyword matching."""
+class AreaTypeConfig:
+    """Keywords for one area type (province/regency/district/village)."""
 
-    code_keywords: tuple[str, ...] = ()
-    name_keywords: tuple[str, ...] = ()
-    coordinate_keywords: tuple[str, ...] = ()
-    status_keywords: tuple[str, ...] = ()
-    info_keywords: tuple[str, ...] = ()
-    exclude_keywords: tuple[str, ...] = ()
+    name_keywords: tuple[str, ...]
+    code_keywords: tuple[str, ...] = ()  # Optional override
+
+
+@dataclass
+class AreaExtractorConfig:
+    """Configuration for area extractor."""
+
+    code_keywords: tuple[str, ...]  # Shared default
+    exclude_keywords: tuple[str, ...]
+    province: AreaTypeConfig
+    regency: AreaTypeConfig
+    district: AreaTypeConfig
+    village: AreaTypeConfig
+
+
+@dataclass
+class IslandExtractorConfig:
+    """Configuration for island extractor."""
+
+    code_keywords: tuple[str, ...]
+    name_keywords: tuple[str, ...]
+    coordinate_keywords: tuple[str, ...]
+    is_populated_keywords: tuple[str, ...]
+    is_outermost_small_keywords: tuple[str, ...]
+    exclude_keywords: tuple[str, ...]
+
+
+@dataclass
+class ExtractorsConfig:
+    """Configuration for all extractors."""
+
+    area: AreaExtractorConfig
+    island: IslandExtractorConfig
 
 
 @dataclass
@@ -43,7 +71,7 @@ class Config:
     """Application configuration loaded from TOML file."""
 
     data: dict[Area, DataConfig]
-    extractors: dict[str, ExtractorConfig]
+    extractors: ExtractorsConfig
     fuzzy_threshold: float = 80.0
     exclude_threshold: float = 65.0
 
@@ -211,33 +239,35 @@ class AppConfig:
         fuzzy_threshold = float(extractors_raw.get("fuzzy_threshold", 80.0))
         exclude_threshold = float(extractors_raw.get("exclude_threshold", 65.0))
 
-        # Parse area and island extractor configs
-        extractors: dict[str, ExtractorConfig] = {}
-
         # Parse area extractor config - REQUIRE it to exist
         area_config_raw = extractors_raw.get("area")
         if not isinstance(area_config_raw, dict) or not area_config_raw:
             raise ConfigError("Missing required section [extractors.area] in configuration")
 
-        extractors["area"] = cls._parse_extractor_config(cast(dict[str, Any], area_config_raw))
+        area_extractor = cls._parse_area_extractor_config(cast(dict[str, Any], area_config_raw))
 
         # Parse island extractor config - REQUIRE it to exist
         island_config_raw = extractors_raw.get("island")
         if not isinstance(island_config_raw, dict) or not island_config_raw:
             raise ConfigError("Missing required section [extractors.island] in configuration")
 
-        extractors["island"] = cls._parse_extractor_config(cast(dict[str, Any], island_config_raw))
+        island_extractor = cls._parse_island_extractor_config(
+            cast(dict[str, Any], island_config_raw)
+        )
 
         return Config(
             data=valid_data_config,
-            extractors=extractors,
+            extractors=ExtractorsConfig(
+                area=area_extractor,
+                island=island_extractor,
+            ),
             fuzzy_threshold=fuzzy_threshold,
             exclude_threshold=exclude_threshold,
         )
 
     @classmethod
-    def _parse_extractor_config(cls, raw: dict[str, Any]) -> ExtractorConfig:
-        """Parse extractor configuration."""
+    def _parse_area_extractor_config(cls, raw: dict[str, Any]) -> AreaExtractorConfig:
+        """Parse area extractor configuration."""
 
         def to_tuple(value: Any) -> tuple[str, ...]:
             if isinstance(value, str):
@@ -247,11 +277,58 @@ class AppConfig:
                 return tuple(str(s).strip().lower() for s in items if str(s).strip())
             return ()
 
-        return ExtractorConfig(
+        # Shared code keywords (default for all area types)
+        shared_code_keywords = to_tuple(raw.get("code_keywords"))
+
+        # Parse each area type
+        area_types = ["province", "regency", "district", "village"]
+        parsed_types: dict[str, AreaTypeConfig] = {}
+
+        for area_type in area_types:
+            type_raw = raw.get(area_type, {})
+            if not isinstance(type_raw, dict):
+                type_raw = {}
+
+            type_raw = cast(dict[str, Any], type_raw)
+
+            # Type-specific code keywords (optional override)
+            type_code_keywords = to_tuple(type_raw.get("code_keywords"))
+            # Use type-specific if provided, otherwise use shared
+            final_code_keywords = type_code_keywords if type_code_keywords else shared_code_keywords
+
+            # Name keywords (required per type)
+            name_keywords = to_tuple(type_raw.get("name_keywords"))
+
+            parsed_types[area_type] = AreaTypeConfig(
+                name_keywords=name_keywords, code_keywords=final_code_keywords
+            )
+
+        return AreaExtractorConfig(
+            code_keywords=shared_code_keywords,
+            exclude_keywords=to_tuple(raw.get("exclude_keywords")),
+            province=parsed_types["province"],
+            regency=parsed_types["regency"],
+            district=parsed_types["district"],
+            village=parsed_types["village"],
+        )
+
+    @classmethod
+    def _parse_island_extractor_config(cls, raw: dict[str, Any]) -> IslandExtractorConfig:
+        """Parse island extractor configuration."""
+
+        def to_tuple(value: Any) -> tuple[str, ...]:
+            if isinstance(value, str):
+                return tuple(s.strip().lower() for s in value.split(",") if s.strip())
+            elif isinstance(value, (list, tuple)):
+                items = cast(Iterable[object], value)
+                return tuple(str(s).strip().lower() for s in items if str(s).strip())
+            return ()
+
+        return IslandExtractorConfig(
             code_keywords=to_tuple(raw.get("code_keywords")),
             name_keywords=to_tuple(raw.get("name_keywords")),
             coordinate_keywords=to_tuple(raw.get("coordinate_keywords")),
-            status_keywords=to_tuple(raw.get("status_keywords")),
-            info_keywords=to_tuple(raw.get("info_keywords")),
+            is_populated_keywords=to_tuple(raw.get("status_keywords")),
+            is_outermost_small_keywords=to_tuple(raw.get("info_keywords")),
             exclude_keywords=to_tuple(raw.get("exclude_keywords")),
         )

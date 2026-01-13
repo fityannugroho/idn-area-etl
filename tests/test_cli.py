@@ -416,7 +416,14 @@ class TestExtractFunction:
             @classmethod
             def load(cls, config_path: object = None, **kwargs: object) -> Config:
                 # Return a minimal valid config with all required areas
-                from idn_area_etl.config import Config, DataConfig, ExtractorConfig
+                from idn_area_etl.config import (
+                    AreaExtractorConfig,
+                    AreaTypeConfig,
+                    Config,
+                    DataConfig,
+                    ExtractorsConfig,
+                    IslandExtractorConfig,
+                )
 
                 return Config(
                     data={
@@ -453,16 +460,24 @@ class TestExtractFunction:
                             filename_suffix="island",
                         ),
                     },
-                    extractors={
-                        "area": ExtractorConfig(
+                    extractors=ExtractorsConfig(
+                        area=AreaExtractorConfig(
+                            code_keywords=("kode",),
+                            exclude_keywords=(),
+                            province=AreaTypeConfig(name_keywords=("nama",)),
+                            regency=AreaTypeConfig(name_keywords=("nama",)),
+                            district=AreaTypeConfig(name_keywords=("nama",)),
+                            village=AreaTypeConfig(name_keywords=("nama",)),
+                        ),
+                        island=IslandExtractorConfig(
                             code_keywords=("kode",),
                             name_keywords=("nama",),
+                            coordinate_keywords=(),
+                            is_populated_keywords=(),
+                            is_outermost_small_keywords=(),
+                            exclude_keywords=(),
                         ),
-                        "island": ExtractorConfig(
-                            code_keywords=("kode",),
-                            name_keywords=("nama",),
-                        ),
-                    },
+                    ),
                 )
 
         class _StubReader:

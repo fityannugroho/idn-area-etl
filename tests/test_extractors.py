@@ -4,7 +4,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from idn_area_etl.config import Config, DataConfig, ExtractorConfig
+from idn_area_etl.config import (
+    AreaExtractorConfig,
+    AreaTypeConfig,
+    Config,
+    DataConfig,
+    ExtractorsConfig,
+    IslandExtractorConfig,
+)
 from idn_area_etl.extractors import AreaExtractor, IslandExtractor
 from idn_area_etl.utils import (
     DISTRICT_CODE_LENGTH,
@@ -56,29 +63,54 @@ def config() -> Config:
                 filename_suffix="island",
             ),
         },
-        extractors={
-            "area": ExtractorConfig(
+        extractors=ExtractorsConfig(
+            area=AreaExtractorConfig(
                 code_keywords=("kode",),
-                name_keywords=(
-                    "nama",
-                    "provinsi",
-                    "kabupaten",
-                    "kota",
-                    "kecamatan",
-                    "desa",
-                    "kelurahan",
+                exclude_keywords=(
+                    "no",
+                    "ibukota",
+                    "jumlah penduduk",
+                    "penduduk",
+                    "ibu kota",
+                    "laki-laki",
+                    "laki laki",
+                    "perempuan",
+                    "l/p",
+                    "total",
+                    "rata-rata",
+                    "rata rata",
+                    "persentase",
+                    "persen",
                 ),
-                exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
+                province=AreaTypeConfig(name_keywords=("nama", "provinsi")),
+                regency=AreaTypeConfig(name_keywords=("nama", "kabupaten", "kota")),
+                district=AreaTypeConfig(name_keywords=("nama", "kecamatan")),
+                village=AreaTypeConfig(name_keywords=("nama", "desa", "kelurahan")),
             ),
-            "island": ExtractorConfig(
+            island=IslandExtractorConfig(
                 code_keywords=("kode", "pulau"),
                 name_keywords=("nama", "pulau"),
                 coordinate_keywords=("koordinat", "kordinat"),
-                status_keywords=("bp/tbp", "bp", "tbp", "status", "keterangan"),
-                info_keywords=("keterangan", "ket"),
-                exclude_keywords=("no", "ibukota", "jumlah penduduk", "penduduk", "ibu kota"),
+                is_populated_keywords=("bp/tbp", "bp", "tbp", "status", "keterangan"),
+                is_outermost_small_keywords=("keterangan", "ket"),
+                exclude_keywords=(
+                    "no",
+                    "ibukota",
+                    "jumlah penduduk",
+                    "penduduk",
+                    "ibu kota",
+                    "laki-laki",
+                    "laki laki",
+                    "perempuan",
+                    "l/p",
+                    "total",
+                    "rata-rata",
+                    "rata rata",
+                    "persentase",
+                    "persen",
+                ),
             ),
-        },
+        ),
         fuzzy_threshold=80.0,
         exclude_threshold=65.0,
     )
@@ -926,6 +958,21 @@ class TestAreaExtractorDynamicColumns:
         assert outputs["province"] == [["11", "Aceh"]]
         assert outputs["village"] == [["11.01.01.2001", "11.01.01", "Keude Bakongan"]]
 
+    def test_extract_swapped_columns(self, tmp_path: Path, config: Config) -> None:
+        """Test district name extraction from swapped column order."""
+        df = pd.DataFrame(
+            [
+                ["K O D E", "NAMA PROVINSI", "N A M A / J U M L A H", "", "", "", ""],
+                ["", "", "D E S A", "KELURAHAN", "KECAMATAN", "KABUPATEN", "KOTA"],
+                ["", "", "", "", "", "", ""],
+                ["11.01.01", "", "7", "", "Bakongan", "", ""],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+        assert count == 1
+        assert outputs["district"] == [["11.01.01", "11.01", "Bakongan"]]
+
 
 class TestAreaExtractorExclusionRules:
     """Test exclusion keyword filtering for AreaExtractor via public API."""
@@ -961,6 +1008,108 @@ class TestAreaExtractorExclusionRules:
             assert ex.matches(df)
 
 
+# ---------- Phase 2: Header Detection Tests ----------
+
+
+class TestAreaExtractorHeaderDetection:
+    """Test header detection logic for AreaExtractor via public API."""
+
+    def test_extract_with_header_in_row0(self, tmp_path: Path, config: Config):
+        """Test extraction correctly identifies header in row 0."""
+        df = pd.DataFrame(
+            [
+                ["K O D E", "NAMA PROVINSI", "COL2"],
+                ["", "", ""],
+                ["11", "Aceh", ""],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert outputs["province"] == [["11", "Aceh"]]
+
+    def test_extract_rejects_malformed_table_no_header(self, tmp_path: Path, config: Config):
+        """Test extraction rejects table without valid header via matches()."""
+        df = pd.DataFrame(
+            [
+                ["DATA", "DATA", "DATA"],
+                ["11", "Aceh", ""],
+            ]
+        )
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_extract_distinguishes_sub_header_from_data(self, tmp_path: Path, config: Config):
+        """Test extraction correctly handles sub-headers and data rows."""
+        df = pd.DataFrame(
+            [
+                ["K O D E", "NAMA PROVINSI", "JUMLAH", "", "NAMA", "", ""],
+                ["", "", "KAB", "KOTA", "KECAMATAN", "KELURAHAN", "D E S A"],
+                ["11", "Aceh", "", "", "", "", ""],
+                ["11.01", "", "", "", "", "", "Kabupaten Aceh Selatan"],
+                ["11.01.01", "", "", "", "Bakongan", "", ""],
+                ["11.01.01.2001", "", "", "", "", "", "Keude Bakongan"],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 4
+        assert outputs["province"] == [["11", "Aceh"]]
+        assert outputs["regency"] == [["11.01", "11", "Kabupaten Aceh Selatan"]]
+        assert outputs["district"] == [["11.01.01", "11.01", "Bakongan"]]
+        assert outputs["village"] == [["11.01.01.2001", "11.01.01", "Keude Bakongan"]]
+
+    def test_extract_2022_keterangan_not_as_name(self, tmp_path: Path, config: Config):
+        """
+        Test that columns are correctly detected and keterangan is not used as name.
+
+        Uses fixture: tests/fixtures/2022-areas-p53-54_p2246_p3337.pdf
+
+        Before fix: Keterangan column (containing "Perbaikan nama desa...") was selected as name
+        After fix: Actual name column should be selected
+        """
+        from typing import cast
+
+        import camelot
+        from camelot.core import TableList
+
+        from idn_area_etl.utils import CamelotTempDir
+
+        pdf_path = Path(__file__).parent / "fixtures" / "2022-areas-p53-54_p2246_p3337.pdf"
+
+        with CamelotTempDir():
+            tables: TableList = camelot.read_pdf(str(pdf_path), pages="1", flavor="lattice")
+
+        assert len(tables) > 0, "PDF should contain at least one table"
+
+        df = cast(pd.DataFrame, tables[0].df)
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count > 0, "Should extract at least one row"
+        villages = outputs["village"]
+        assert len(villages) > 0, "Should extract village data"
+
+        # Test specific problematic village
+        village_2024 = [v for v in villages if v[0] == "11.02.11.2024"]
+        assert len(village_2024) == 1, "Should find village 11.02.11.2024"
+
+        name = village_2024[0][2]
+
+        # Should contain actual name
+        assert "sepekhinding" in name.lower(), f"Expected 'Sepekhinding' in name, got: {name}"
+
+        # Should NOT contain keterangan text
+        assert "qanun" not in name.lower(), (
+            f"Name should not contain 'qanun' (keterangan text), got: {name}"
+        )
+        assert "perbaikan" not in name.lower(), (
+            f"Name should not contain 'perbaikan' (keterangan text), got: {name}"
+        )
+
+
 class TestIslandExtractorExclusionRules:
     """Test IslandExtractor exclusion rules via public API."""
 
@@ -978,6 +1127,168 @@ class TestIslandExtractorExclusionRules:
 
     def test_matches_accepts_valid_island_table(self, tmp_path: Path, config: Config) -> None:
         """Test valid island tables are accepted."""
+        df = pd.DataFrame(
+            [
+                ["Kode Pulau", "Nama", "Koordinat", "BP/TBP", "Keterangan"],
+                ["12.01.40001", "Pulau X", "03°19'03.44\" U  097°07'41.73\" T", "BP", ""],
+            ]
+        )
+
+        with _island_extractor(tmp_path, config) as ex:
+            assert ex.matches(df)
+
+
+# ---------- Phase 3: Population Table Rejection Tests ----------
+
+
+class TestAreaExtractorPopulationTableRejection:
+    """Test AreaExtractor rejects population/demographic tables via public API."""
+
+    def test_matches_rejects_population_table_with_laki_laki(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test tables with 'Laki-laki' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Wilayah", "Laki-laki", "Perempuan", "Total"],
+                ["11.01", "Kabupaten Aceh Selatan", "100000", "95000", "195000"],
+            ]
+        )
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_rejects_population_table_with_perempuan(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test tables with 'Perempuan' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Wilayah", "Laki Laki", "Perempuan"],
+                ["11.01", "Kabupaten Aceh Selatan", "100000", "95000"],
+            ]
+        )
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_rejects_population_table_with_lp(self, tmp_path: Path, config: Config) -> None:
+        """Test tables with 'L/P' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Wilayah", "L/P", "Jumlah"],
+                ["11.01", "Kabupaten Aceh Selatan", "1.05", "195000"],
+            ]
+        )
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_rejects_statistics_table_with_total(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test tables with 'Total' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Wilayah", "Jumlah", "Total"],
+                ["11.01", "Kabupaten Aceh Selatan", "1000", "2000"],
+            ]
+        )
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_rejects_statistics_table_with_rata_rata(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test tables with 'Rata-rata' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Wilayah", "Nilai", "Rata-rata"],
+                ["11.01", "Kabupaten Aceh Selatan", "100", "50"],
+            ]
+        )
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_rejects_statistics_table_with_persentase(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test tables with 'Persentase' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Wilayah", "Jumlah", "Persentase"],
+                ["11.01", "Kabupaten Aceh Selatan", "1000", "15.5%"],
+            ]
+        )
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_extract_2025_population_table_rejected(self, tmp_path: Path, config: Config) -> None:
+        """
+        Test population table from 2025 PDF is correctly rejected.
+
+        Uses fixture: tests/fixtures/table_types_2025.pdf
+        Page 6: Population statistics with Laki-laki/Perempuan columns
+        """
+        from typing import cast
+
+        import camelot
+        from camelot.core import TableList
+
+        from idn_area_etl.utils import CamelotTempDir
+
+        pdf_path = Path(__file__).parent / "fixtures" / "table_types_2025.pdf"
+
+        with CamelotTempDir():
+            tables: TableList = camelot.read_pdf(str(pdf_path), pages="6", flavor="lattice")
+
+        assert len(tables) > 0, "PDF page should contain at least one table"
+
+        # Page 6: Population statistics table (should be rejected)
+        population_table = cast(pd.DataFrame, tables[0].df)
+
+        with _area_extractor(tmp_path, config) as ex:
+            assert not ex.matches(population_table), "Population table should be rejected"
+
+
+class TestIslandExtractorPopulationTableRejection:
+    """Test IslandExtractor rejects population/demographic tables via public API."""
+
+    def test_matches_rejects_population_table_with_laki_laki(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test island tables with 'Laki-laki' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["Kode Pulau", "Nama Pulau", "Laki-laki", "Perempuan", "Total"],
+                ["12.01.40001", "Pulau X", "1000", "950", "1950"],
+            ]
+        )
+
+        with _island_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_rejects_population_table_with_persentase(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test island tables with 'Persentase' column are rejected."""
+        df = pd.DataFrame(
+            [
+                ["Kode Pulau", "Nama Pulau", "Jumlah", "Persentase"],
+                ["12.01.40001", "Pulau X", "1000", "5.5%"],
+            ]
+        )
+
+        with _island_extractor(tmp_path, config) as ex:
+            assert not ex.matches(df)
+
+    def test_matches_accepts_valid_island_table_after_config_update(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """Test valid island tables are still accepted after config update."""
         df = pd.DataFrame(
             [
                 ["Kode Pulau", "Nama", "Koordinat", "BP/TBP", "Keterangan"],
