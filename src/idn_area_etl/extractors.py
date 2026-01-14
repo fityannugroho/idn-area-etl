@@ -190,16 +190,20 @@ class AreaExtractor(TableExtractor):
         """
         from rapidfuzz import fuzz
 
-        matches: list[tuple[int, float, int]] = []  # (col_idx, score, keyword_len)
+        matches: list[tuple[int, float, int, float]] = []  # (col_idx, score, keyword_len, ratio)
 
         # Score each column (except 0) against all keywords
         for idx in range(1, len(headers)):
             header = headers[idx].lower()
             best_score_for_col = 0.0
             best_kw_len_for_col = 0
+            best_ratio_for_col = 0.0
 
             for keyword in keywords:
                 keyword_lower = keyword.lower()
+
+                # Calculate full ratio for tie-breaking
+                ratio = fuzz.ratio(keyword_lower, header)
 
                 # Try exact substring match first
                 if keyword_lower in header:
@@ -207,25 +211,31 @@ class AreaExtractor(TableExtractor):
                 else:
                     # Use partial_ratio for fuzzy matching
                     if len(keyword_lower) > len(header):
-                        score = fuzz.ratio(keyword_lower, header)
+                        score = ratio
                     else:
                         score = fuzz.partial_ratio(keyword_lower, header)
 
                 # Track best score and keyword length for this column
                 if score >= self._fuzzy_threshold:
-                    if score > best_score_for_col or (
-                        score == best_score_for_col and len(keyword_lower) > best_kw_len_for_col
-                    ):
+                    if score > best_score_for_col:
                         best_score_for_col = score
                         best_kw_len_for_col = len(keyword_lower)
+                        best_ratio_for_col = ratio
+                    elif score == best_score_for_col:
+                        if len(keyword_lower) > best_kw_len_for_col:
+                            best_kw_len_for_col = len(keyword_lower)
+                            best_ratio_for_col = ratio
+                        elif len(keyword_lower) == best_kw_len_for_col:
+                            if ratio > best_ratio_for_col:
+                                best_ratio_for_col = ratio
 
             if best_score_for_col >= self._fuzzy_threshold:
-                matches.append((idx, best_score_for_col, best_kw_len_for_col))
+                matches.append((idx, best_score_for_col, best_kw_len_for_col, best_ratio_for_col))
 
-        # Sort by score (descending), then keyword length (descending)
-        matches.sort(key=lambda x: (x[1], x[2]), reverse=True)
+        # Sort by score (descending), then keyword length (descending), then ratio (descending)
+        matches.sort(key=lambda x: (x[1], x[2], x[3]), reverse=True)
 
-        return [idx for idx, _, _ in matches]
+        return [idx for idx, _, _, _ in matches]
 
     def _find_header_row(self, df: pd.DataFrame) -> int | None:
         """

@@ -973,6 +973,63 @@ class TestAreaExtractorDynamicColumns:
         assert count == 1
         assert outputs["district"] == [["11.01.01", "11.01", "Bakongan"]]
 
+    def test_extract_ambiguous_header_name(self, tmp_path: Path, config: Config) -> None:
+        """
+        Test that column inference prefers exact/better matches over partial ones.
+
+        Scenario: Headers include ["Nama Kepala Desa", "Nama"]
+        - "Nama Kepala Desa" matches "nama" (score 100, partial)
+        - "Nama" matches "nama" (score 100, full)
+
+        We expect "Nama" to be selected because of better coverage ratio.
+        """
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Kepala Desa", "Nama"],
+                ["", "", ""],
+                ["11.01.01.2001", "Pak Budi", "Gampong Baro"],
+            ]
+        )
+
+        # Configure to ensure "nama" is a keyword for village
+        # (It is by default in the fixture config)
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert len(outputs["village"]) == 1
+        row = outputs["village"][0]
+        # row: [code, parent_code, name]
+        assert row[2] == "Gampong Baro", f"Expected 'Gampong Baro', got '{row[2]}'"
+
+    def test_extract_ambiguous_header_keyword_coverage(
+        self, tmp_path: Path, config: Config
+    ) -> None:
+        """
+        Test that column inference prefers better coverage when keywords differ.
+
+        Scenario: Headers include ["Nama Kepala", "Desa"]
+        - "Nama Kepala" matches "nama" (len 4, score 100)
+        - "Desa" matches "desa" (len 4, score 100)
+
+        We expect "Desa" to be selected because 'desa' covers 'Desa' (100%),
+        while 'nama' covers 'Nama Kepala' (~40%).
+        """
+        df = pd.DataFrame(
+            [
+                ["Kode", "Nama Kepala", "Desa"],
+                ["", "", ""],
+                ["11.01.01.2001", "Pak Budi", "Gampong Baro"],
+            ]
+        )
+
+        count, outputs = _run_area_extraction(df, tmp_path, config)
+
+        assert count == 1
+        assert len(outputs["village"]) == 1
+        row = outputs["village"][0]
+        assert row[2] == "Gampong Baro", f"Expected 'Gampong Baro', got '{row[2]}'"
+
 
 class TestAreaExtractorExclusionRules:
     """Test exclusion keyword filtering for AreaExtractor via public API."""
