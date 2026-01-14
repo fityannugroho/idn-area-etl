@@ -18,7 +18,7 @@ from idn_area_etl.ground_truth import (
     GroundTruthIndex,
     IslandRecord,
 )
-from idn_area_etl.utils import MatchCandidate
+from idn_area_etl.utils import MatchCandidate, SafeDictReader
 
 NormalizationStatus = Literal["valid", "corrected", "ambiguous", "not_found"]
 
@@ -628,8 +628,8 @@ def normalize_csv(
     )
     report = NormalizationReport(area=area)
 
-    with file_path.open("r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+    with file_path.open("r", newline="", encoding="utf-8-sig") as f:
+        reader = SafeDictReader(f)
 
         for row_num, row in enumerate(reader, start=2):  # Start at 2 (1 is header)
             row_norm = normalizer.normalize_row(row, row_num, area)

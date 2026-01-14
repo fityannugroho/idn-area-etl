@@ -5,13 +5,12 @@ Loads reference CSV data and provides lookup/search capabilities for
 validating and normalizing extracted data.
 """
 
-import csv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, Protocol, TypeVar
 
 from idn_area_etl.config import Area
-from idn_area_etl.utils import MatchCandidate, fuzzy_search_top_n
+from idn_area_etl.utils import MatchCandidate, SafeDictReader, fuzzy_search_top_n
 
 
 class HasCodeAndName(Protocol):
@@ -165,8 +164,8 @@ class GroundTruthIndex:
         or None if unable to detect.
         """
         try:
-            with csv_path.open("r", newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
+            with csv_path.open("r", newline="", encoding="utf-8-sig") as f:
+                reader = SafeDictReader(f)
                 if not reader.fieldnames:
                     return None
 
@@ -205,8 +204,8 @@ class GroundTruthIndex:
         parent_field = PARENT_FIELD_MAP.get(area, "")
         hierarchy_map = self._get_hierarchy_map(area)
 
-        with path.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+        with path.open("r", newline="", encoding="utf-8-sig") as f:
+            reader = SafeDictReader(f)
             for row in reader:
                 code = row.get("code", "")
                 name = row.get("name", "")
@@ -223,8 +222,8 @@ class GroundTruthIndex:
 
     def _load_island_csv(self, path: Path) -> None:
         """Load island CSV into the island index."""
-        with path.open("r", newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
+        with path.open("r", newline="", encoding="utf-8-sig") as f:
+            reader = SafeDictReader(f)
             for row in reader:
                 record = IslandRecord(
                     code=row.get("code", ""),

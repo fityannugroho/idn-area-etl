@@ -23,6 +23,7 @@ from idn_area_etl.utils import (
     RE_REGENCY_CODE,
     RE_VILLAGE_CODE,
     REGENCY_CODE_LENGTH,
+    SafeDictReader,
 )
 
 
@@ -454,8 +455,8 @@ def validate_csv(
     validator = get_validator(area)
     report = ValidationReport(area=area, total_rows=0)
 
-    with file_path.open("r", newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+    with file_path.open("r", newline="", encoding="utf-8-sig") as f:
+        reader = SafeDictReader(f)
 
         # Validate headers first
         if reader.fieldnames:

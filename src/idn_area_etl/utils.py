@@ -1,4 +1,5 @@
 import atexit
+import csv
 import re
 import shutil
 import tempfile
@@ -8,6 +9,39 @@ from types import TracebackType
 from typing import Any, Iterator
 
 from rapidfuzz import fuzz, process
+
+# =========================
+# CSV handling utilities
+# =========================
+
+
+class SafeDictReader(csv.DictReader[str]):
+    """
+    CSV DictReader that handles BOM and strips whitespace from headers.
+
+    Automatically uses utf-8-sig encoding to strip UTF-8 BOM if present,
+    and strips leading/trailing whitespace from all field names.
+
+    This fixes two common bugs:
+    1. UTF-8 BOM (\\ufeff) prepended to first header breaking lookups
+    2. Headers with whitespace causing dictionary key mismatches
+
+    Usage:
+        with open("file.csv", newline="", encoding="utf-8-sig") as f:
+            reader = SafeDictReader(f)
+            for row in reader:
+                print(row["code"])  # Works even with BOM or whitespace
+    """
+
+    @property
+    def fieldnames(self) -> list[str] | None:  # type: ignore[override]
+        """Get field names with whitespace stripped from each name."""
+        names = super().fieldnames
+        if names is None:
+            return None
+        # Strip whitespace from each fieldname
+        return [name.strip() for name in names]
+
 
 # =========================
 # Temporary directory management for camelot
